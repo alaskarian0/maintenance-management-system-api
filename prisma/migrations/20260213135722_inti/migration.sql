@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Admin" ALTER COLUMN "id" SET DEFAULT 1,
+ALTER COLUMN "id" DROP DEFAULT;
+DROP SEQUENCE "Admin_id_seq";
