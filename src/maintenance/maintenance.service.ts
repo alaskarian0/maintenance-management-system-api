@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateMaintenanceRecordDto } from './dto/create-maintenance-record.dto';
 import { UpdateMaintenanceRecordDto } from './dto/update-maintenance-record.dto';
+import { normalizePartsUsed } from './parts-used.util';
 
 @Injectable()
 export class MaintenanceService {
@@ -22,16 +23,23 @@ export class MaintenanceService {
         technicianName: dto.technicianName,
         status: dto.status ?? 'OPEN',
         date: new Date(dto.date),
+        ...(dto.partsUsed !== undefined
+          ? { partsUsed: normalizePartsUsed(dto.partsUsed) }
+          : {}),
       },
     });
   }
 
   update(deviceId: string, recordId: string, dto: UpdateMaintenanceRecordDto) {
+    const { date: dateStr, partsUsed, ...rest } = dto;
     return this.prisma.maintenanceRecord.update({
       where: { id: recordId, deviceId },
       data: {
-        ...dto,
-        date: dto.date ? new Date(dto.date) : undefined,
+        ...rest,
+        ...(dateStr !== undefined ? { date: new Date(dateStr) } : {}),
+        ...(partsUsed !== undefined
+          ? { partsUsed: normalizePartsUsed(partsUsed) }
+          : {}),
       },
     });
   }
@@ -39,6 +47,32 @@ export class MaintenanceService {
   remove(deviceId: string, recordId: string) {
     return this.prisma.maintenanceRecord.delete({
       where: { id: recordId, deviceId },
+    });
+  }
+
+  findRecent(limit: number) {
+    return this.prisma.maintenanceRecord.findMany({
+      take: limit,
+      orderBy: { date: 'desc' },
+      include: {
+        device: {
+          select: {
+            serialNumber: true,
+            category: { select: { name: true } },
+            unit: {
+              select: {
+                name: true,
+                division: {
+                  select: {
+                    name: true,
+                    department: { select: { name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
   }
 }

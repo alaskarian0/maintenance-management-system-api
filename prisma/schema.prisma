@@ -8,15 +8,47 @@ datasource db {
 }
 
 model Link {
-  id        String   @id @default(cuid())
-  name      String
-  url       String
-  createdAt DateTime @default(now())
+  id            String          @id @default(cuid())
+  name          String
+  url           String
+  isMaintenance Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  statusLogs    LinkStatusLog[]
+}
+
+model LinkStatusLog {
+  id             String   @id @default(cuid())
+  link           Link     @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  linkId         String
+  isUp           Boolean
+  statusCode     Int?
+  responseTimeMs Int?
+  errorMessage   String?
+  checkedAt      DateTime @default(now())
+
+  @@index([linkId, checkedAt(sort: Desc)])
 }
 
 model Admin {
   id           Int      @id @default(1)
   passwordHash String
+  updatedAt    DateTime @updatedAt
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  TECHNICIAN
+}
+
+model User {
+  id           String   @id @default(cuid())
+  userName     String   @unique
+  fullName     String
+  passwordHash String
+  role         UserRole @default(USER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
 
@@ -77,6 +109,8 @@ model MaintenanceRecord {
   technicianName String
   status         MaintenanceStatus @default(OPEN)
   date           DateTime
+  /// [{ "name": string, "quantity": number }, ...]
+  partsUsed      Json?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 }

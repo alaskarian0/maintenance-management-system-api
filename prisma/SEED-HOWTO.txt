@@ -1,0 +1,28 @@
+Seed fills demo data and org tree from prisma/data/employes2-unique-hierarchy.json.
+It FIRST deletes: maintenance records, devices, units, divisions, departments, categories, links.
+
+When to run
+  Only when you intend to reset that data (e.g. local dev refresh).
+
+How to run (from maintenance-management-system-api)
+  npm run db:seed
+  or: npx prisma db seed
+
+Interactive
+  You will be asked to type YES before anything is deleted.
+
+Non-interactive (scripts, CI, migrate reset without TTY)
+  PowerShell:  $env:SEED_CONFIRM="yes"; npx prisma db seed
+  cmd:         set SEED_CONFIRM=yes && npx prisma db seed
+  Unix:        SEED_CONFIRM=yes npx prisma db seed
+
+Optional environment variables
+  SEED_INCLUDE_INACTIVE_HIERARCHY=1  Include "( المنقطعين عن العمل )" org paths from JSON.
+  ADMIN_INITIAL_PASSWORD             Used only if no Admin row exists yet.
+  SEED_CONFIRM=yes                   Skip the YES prompt (required in non-interactive mode).
+
+Files
+  prisma/seed.ts              Main script
+  prisma/seedGuard.ts         Confirmation gate
+  prisma/hierarchyFromJson.ts Org import from JSON
+  prisma/data/employes2-unique-hierarchy.json  Source data
