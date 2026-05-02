@@ -19,3 +19,70 @@ model Admin {
   passwordHash String
   updatedAt    DateTime @updatedAt
 }
+
+model Department {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  divisions Division[]
+  createdAt DateTime   @default(now())
+}
+
+model Division {
+  id           String     @id @default(cuid())
+  name         String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  departmentId String
+  units        Unit[]
+  createdAt    DateTime   @default(now())
+
+  @@unique([name, departmentId])
+}
+
+model Unit {
+  id         String   @id @default(cuid())
+  name       String
+  division   Division @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  divisionId String
+  devices    Device[]
+  createdAt  DateTime @default(now())
+
+  @@unique([name, divisionId])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  devices   Device[]
+  createdAt DateTime @default(now())
+}
+
+model Device {
+  id                 String              @id @default(cuid())
+  serialNumber       String              @unique
+  category           Category            @relation(fields: [categoryId], references: [id])
+  categoryId         String
+  unit               Unit                @relation(fields: [unitId], references: [id])
+  unitId             String
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  maintenanceRecords MaintenanceRecord[]
+}
+
+model MaintenanceRecord {
+  id             String            @id @default(cuid())
+  device         Device            @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  deviceId       String
+  description    String
+  technicianName String
+  status         MaintenanceStatus @default(OPEN)
+  date           DateTime
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+enum MaintenanceStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
