@@ -9,7 +9,13 @@ async function bootstrap() {
     origin: corsOrigins?.length ? corsOrigins : true,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'X-User-Name',
+      'X-User-Id',
+    ],
   });
   const port = process.env.PORT || 3000;
   await app.listen(port);

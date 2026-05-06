@@ -9,6 +9,7 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
+    "start:dev:seed": "set SEED_CONFIRM=yes&& prisma db seed && nest start --watch",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
@@ -23,7 +24,8 @@
     "dotenv": "^16.6.1",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
-    "super-template": "file:../../super-template"
+    "super-template": "file:../../super-template",
+    "zk-attendance-sdk": "^2.1.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

@@ -15,7 +15,7 @@ import * as bcrypt from 'bcrypt';
 import {
   PrismaClient,
   MaintenanceStatus,
-  SystemType,
+  UserRole,
   Prisma,
   type Prisma as PrismaJson,
 } from '@prisma/client';
@@ -55,6 +55,40 @@ async function main() {
       },
     });
   }
+
+  // Seed baseline users for recipient/staff pickers.
+  const userInitialPassword =
+    process.env.USER_INITIAL_PASSWORD?.trim() || '123456';
+  const userPasswordHash = await bcrypt.hash(userInitialPassword, SALT_ROUNDS);
+  const seedUsers: Array<{
+    userName: string;
+    fullName: string;
+    role: UserRole;
+  }> = [
+    { userName: 'admin', fullName: 'مدير النظام', role: UserRole.ADMIN },
+    { userName: 'tech.ahmed', fullName: 'أحمد السيد', role: UserRole.TECHNICIAN },
+    { userName: 'tech.fatima', fullName: 'فاطمة علي', role: UserRole.TECHNICIAN },
+    { userName: 'muntasebeen', fullName: 'منتسبين', role: UserRole.USER },
+  ];
+  await Promise.all(
+    seedUsers.map((u) =>
+      prisma.user.upsert({
+        where: { userName: u.userName },
+        update: {
+          fullName: u.fullName,
+          role: u.role,
+          isActive: true,
+        },
+        create: {
+          userName: u.userName,
+          fullName: u.fullName,
+          role: u.role,
+          passwordHash: userPasswordHash,
+          isActive: true,
+        },
+      }),
+    ),
+  );
 
   const allUnits = await seedDepartmentsFromHierarchy(prisma);
 

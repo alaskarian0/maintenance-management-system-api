@@ -149,19 +149,31 @@ export class FingerprintsService {
     const apiKey = process.env.RESIDENTS_API_KEY;
 
     if (!apiUrl || !apiKey) {
-      throw new Error(
-        'RESIDENTS_API_URL and RESIDENTS_API_KEY must be configured in .env',
+      console.warn(
+        '[FingerprintsService] RESIDENTS_API_URL / RESIDENTS_API_KEY not configured – returning empty list',
       );
+      return this.residentsCache ?? [];
     }
 
-    const res = await fetch(apiUrl, {
-      headers: { 'X-API-Key': apiKey },
-    });
+    let res: Response;
+    try {
+      res = await fetch(apiUrl, {
+        headers: { 'X-API-Key': apiKey },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      console.warn(
+        '[FingerprintsService] Residents API unreachable – returning cached or empty list:',
+        err instanceof Error ? err.message : err,
+      );
+      return this.residentsCache ?? [];
+    }
 
     if (!res.ok) {
-      throw new Error(
-        `Residents API returned ${res.status}: ${res.statusText}`,
+      console.warn(
+        `[FingerprintsService] Residents API returned ${res.status} – returning cached or empty list`,
       );
+      return this.residentsCache ?? [];
     }
 
     const json = (await res.json()) as FamiliesResponse;

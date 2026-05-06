@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { CategoriesService } from '../categories/categories.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { QueryDeviceDto } from './dto/query-device.dto';
@@ -43,6 +44,7 @@ export class DevicesService {
   constructor(
     private prisma: PrismaService,
     private activityLog: ActivityLogService,
+    private categoriesService: CategoriesService,
   ) {}
 
   async findAll(query: QueryDeviceDto) {
@@ -375,9 +377,15 @@ export class DevicesService {
   async bulkImport(dto: BulkImportDto, actorName = 'غير معروف') {
     const results: { serialNumber: string; deviceId?: string; error?: string }[] =
       [];
+
+    // Pre-load all device types for fallback resolution
+    const allTypes = await this.prisma.deviceType.findMany({ orderBy: { name: 'asc' } });
+    const firstType = allTypes[0];
+
     for (const row of dto.rows) {
       const serial = row.serialNumber?.trim();
-      if (!serial || !row.categoryId) {
+      const categoryName = row.categoryName?.trim();
+      if (!serial || !categoryName) {
         results.push({
           serialNumber: serial ?? '',
           error: 'بيانات ناقصة',
@@ -385,10 +393,38 @@ export class DevicesService {
         continue;
       }
       try {
+        // Resolve category by name
+        let category = await this.categoriesService.findCategoryByName(categoryName);
+
+        if (!category) {
+          // Determine deviceTypeId
+          let deviceTypeId: string | undefined;
+
+          if (row.deviceTypeName?.trim()) {
+            let deviceType = await this.categoriesService.findDeviceTypeByName(row.deviceTypeName.trim());
+            if (!deviceType) {
+              deviceType = await this.categoriesService.createDeviceTypeByName(row.deviceTypeName.trim());
+            }
+            deviceTypeId = deviceType.id;
+          } else if (firstType) {
+            deviceTypeId = firstType.id;
+          }
+
+          if (!deviceTypeId) {
+            results.push({
+              serialNumber: serial,
+              error: 'لا يوجد نوع جهاز — حدد deviceTypeName أو أنشئ نوعاً أولاً',
+            });
+            continue;
+          }
+
+          category = await this.categoriesService.createCategoryByName(categoryName, deviceTypeId);
+        }
+
         const device = await this.prisma.device.create({
           data: {
             name: row.name?.trim() || undefined,
-            categoryId: row.categoryId,
+            categoryId: category.id,
             nature: row.nature ?? 'FIXED',
             items: {
               create: [{ serialNumber: serial }],

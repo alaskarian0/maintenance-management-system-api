@@ -38,4 +38,26 @@ export class CategoriesService {
   remove(id: string) {
     return this.prisma.category.delete({ where: { id } });
   }
+
+  findCategoryByName(name: string) {
+    return this.prisma.category.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+  }
+
+  findDeviceTypeByName(name: string) {
+    return this.prisma.deviceType.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+  }
+
+  createCategoryByName(name: string, deviceTypeId: string) {
+    return this.prisma.category.create({
+      data: { name, deviceTypeId },
+    });
+  }
+
+  createDeviceTypeByName(name: string) {
+    return this.prisma.deviceType.create({ data: { name } });
+  }
 }

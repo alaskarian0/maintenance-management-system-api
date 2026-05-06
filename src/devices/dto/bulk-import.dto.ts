@@ -2,7 +2,8 @@ import { DeviceNature } from '@prisma/client';
 
 export class BulkImportRowDto {
   name?: string;
-  categoryId: string;
+  categoryName: string;
+  deviceTypeName?: string;
   nature?: DeviceNature;
   serialNumber: string;
 }
