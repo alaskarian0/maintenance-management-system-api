@@ -1,102 +1,161 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import type { PrismaClient, Unit } from '@prisma/client';
 
-/** Same delimiter as in employes2-unique-hierarchy.json paths */
-const PATH_SPLIT = '  -  ';
+interface HierarchyEntity {
+  id: number;
+  name: string;
+  entityCode: string;
+  type: 'DEPARTMENT' | 'DIVISION' | 'WORKSHOP' | 'UNIT';
+  isTerminated: boolean;
+  parentId: number | null;
+  children: HierarchyEntity[];
+}
 
-const INACTIVE_MARKER = '( المنقطعين عن العمل )';
+interface HierarchyResponse {
+  success: boolean;
+  data: HierarchyEntity[];
+}
 
-export type HierarchyTriple = {
-  department: string;
-  division: string;
-  unit: string;
-};
+async function fetchHierarchy(): Promise<HierarchyEntity[]> {
+  const url =
+    process.env.HIERARCHY_SYNC_URL ||
+    'http://192.168.0.31:5000/job-information/hierarchy-entities/full';
 
-export function parseHierarchyJson(
-  raw: string,
-  options?: { excludeInactive?: boolean },
-): HierarchyTriple[] {
-  const excludeInactive = options?.excludeInactive !== false;
-  const doc = JSON.parse(raw) as { unique?: string[] };
-  const paths = doc.unique ?? [];
-  const triples: HierarchyTriple[] = [];
+  console.log(`[seed] Fetching hierarchy from ${url} ...`);
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`External API returned ${res.status}: ${res.statusText}`);
+  }
+  const json = (await res.json()) as HierarchyResponse;
+  if (!json.success || !Array.isArray(json.data)) {
+    throw new Error('Invalid response format from external API');
+  }
+  console.log(
+    `[seed] Fetched ${json.data.length} root entities from external API`,
+  );
+  return json.data;
+}
 
-  for (const line of paths) {
-    if (!line || typeof line !== 'string') continue;
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (excludeInactive && trimmed.includes(INACTIVE_MARKER)) continue;
+function processEntity(
+  entity: HierarchyEntity,
+  departmentId: string | null,
+  tree: Map<string, Map<string, Set<string>>>,
+) {
+  if (entity.isTerminated) return;
 
-    const parts = trimmed
-      .split(PATH_SPLIT)
-      .map((p) => p.trim().replace(/\s+/g, ' '))
-      .filter(Boolean);
-    if (parts.length === 0) continue;
+  if (entity.type === 'DEPARTMENT' && departmentId === null) {
+    // Top-level department
+    const deptName = entity.name.trim();
+    if (!deptName) return;
+    if (!tree.has(deptName)) tree.set(deptName, new Map());
+    const divMap = tree.get(deptName)!;
 
-    if (parts.length === 1) {
-      triples.push({
-        department: parts[0],
-        division: 'عام',
-        unit: 'عام',
-      });
-    } else if (parts.length === 2) {
-      triples.push({
-        department: parts[0],
-        division: parts[1],
-        unit: 'عام',
-      });
-    } else {
-      triples.push({
-        department: parts[0],
-        division: parts[1],
-        unit: parts.slice(2).join(' - '),
-      });
+    for (const child of entity.children) {
+      processChild(child, divMap);
     }
   }
-
-  return triples;
 }
 
-/** Merge triples into dept → division → set(units), deduped */
-export function buildHierarchyTree(
-  triples: HierarchyTriple[],
-): Map<string, Map<string, Set<string>>> {
-  const tree = new Map<string, Map<string, Set<string>>>();
-  for (const t of triples) {
-    if (!tree.has(t.department)) tree.set(t.department, new Map());
-    const divMap = tree.get(t.department)!;
-    if (!divMap.has(t.division)) divMap.set(t.division, new Set());
-    const u = t.unit.trim();
-    if (u) divMap.get(t.division)!.add(u);
+function processChild(
+  entity: HierarchyEntity,
+  divMap: Map<string, Set<string>>,
+) {
+  if (entity.isTerminated) return;
+
+  if (entity.type === 'DIVISION' || entity.type === 'WORKSHOP') {
+    const divName = entity.name.trim();
+    if (!divName) return;
+    if (!divMap.has(divName)) divMap.set(divName, new Set());
+    const units = divMap.get(divName)!;
+
+    for (const child of entity.children) {
+      if (child.isTerminated) continue;
+      const unitName = child.name.trim();
+      if (unitName) units.add(unitName);
+
+      // Process deeper nesting as units too
+      if (child.children?.length) {
+        collectUnitsDeep(child.children, units);
+      }
+    }
+  } else if (entity.type === 'UNIT') {
+    // Unit directly under department — create a "عام" division
+    const divName = 'عام';
+    if (!divMap.has(divName)) divMap.set(divName, new Set());
+    const units = divMap.get(divName)!;
+    const unitName = entity.name.trim();
+    if (unitName) units.add(unitName);
+
+    if (entity.children?.length) {
+      collectUnitsDeep(entity.children, units);
+    }
+  } else if (entity.type === 'DEPARTMENT') {
+    // Nested department under a department — treat as a division
+    const divName = entity.name.trim();
+    if (!divName) return;
+    if (!divMap.has(divName)) divMap.set(divName, new Set());
+    const units = divMap.get(divName)!;
+
+    for (const child of entity.children) {
+      if (child.isTerminated) continue;
+      if (child.type === 'UNIT' || child.type === 'WORKSHOP' || child.type === 'DIVISION') {
+        const unitName = child.name.trim();
+        if (unitName) units.add(unitName);
+      }
+      if (child.children?.length) {
+        collectUnitsDeep(child.children, units);
+      }
+    }
   }
-  return tree;
 }
 
-export async function seedDepartmentsFromHierarchyJson(
-  prisma: PrismaClient,
-  options?: { excludeInactive?: boolean },
-): Promise<Unit[]> {
-  const excludeInactive = options?.excludeInactive !== false;
-  const jsonPath = path.join(
-    process.cwd(),
-    'prisma',
-    'data',
-    'employes2-unique-hierarchy.json',
-  );
-  const raw = fs.readFileSync(jsonPath, 'utf8');
-  const triples = parseHierarchyJson(raw, { excludeInactive });
-  const tree = buildHierarchyTree(triples);
+function collectUnitsDeep(
+  children: HierarchyEntity[],
+  units: Set<string>,
+) {
+  for (const child of children) {
+    if (child.isTerminated) continue;
+    const name = child.name.trim();
+    if (name) units.add(name);
+    if (child.children?.length) {
+      collectUnitsDeep(child.children, units);
+    }
+  }
+}
 
+export async function seedDepartmentsFromHierarchy(
+  prisma: PrismaClient,
+): Promise<Unit[]> {
+  let rootEntities: HierarchyEntity[];
+  try {
+    rootEntities = await fetchHierarchy();
+  } catch {
+    console.log('[seed] External hierarchy API unreachable — creating fallback departments');
+    return createFallbackDepartments(prisma);
+  }
+
+  // Build dept → division → set(units) tree
+  const tree = new Map<string, Map<string, Set<string>>>();
+
+  for (const entity of rootEntities) {
+    processEntity(entity, null, tree);
+  }
+
+  // Create all departments, divisions, and units
   const allUnits: Unit[] = [];
-  const sortedDepts = [...tree.keys()].sort((a, b) => a.localeCompare(b, 'ar'));
+  const sortedDepts = [...tree.keys()].sort((a, b) =>
+    a.localeCompare(b, 'ar'),
+  );
+
+  console.log(
+    `[seed] Creating ${sortedDepts.length} departments with divisions and units...`,
+  );
 
   for (const deptName of sortedDepts) {
-    if (!deptName.trim()) continue;
     const divMap = tree.get(deptName)!;
     const sortedDivs = [...divMap.keys()]
       .filter((dn) => (divMap.get(dn)?.size ?? 0) > 0)
       .sort((a, b) => a.localeCompare(b, 'ar'));
+
     if (sortedDivs.length === 0) continue;
 
     const created = await prisma.department.create({
@@ -122,5 +181,56 @@ export async function seedDepartmentsFromHierarchyJson(
     allUnits.push(...created.divisions.flatMap((d) => d.units));
   }
 
+  console.log(
+    `[seed] Created ${sortedDepts.length} departments, ${allUnits.length} units total`,
+  );
+
+  return allUnits;
+}
+
+async function createFallbackDepartments(prisma: PrismaClient): Promise<Unit[]> {
+  const departments = [
+    {
+      name: 'الصيانة العامة',
+      divisions: [
+        { name: 'المعدات الميكانيكية', units: ['مضخات', 'محركات', 'توربينات'] },
+        { name: 'الكهرباء', units: ['لوحات كهربائية', 'كابلات'] },
+      ],
+    },
+    {
+      name: 'تقنية المعلومات',
+      divisions: [
+        { name: 'الشبكات', units: ['خوادم', 'سويتشات'] },
+        { name: 'الدعم الفني', units: ['أجهزة حاسب', 'طابعات'] },
+      ],
+    },
+    {
+      name: 'التشغيل والإنتاج',
+      divisions: [
+        { name: 'التعبئة والتغليف', units: ['خط إنتاج ١', 'خط إنتاج ٢'] },
+        { name: 'الجودة', units: ['معايرة', 'فحص'] },
+      ],
+    },
+  ];
+
+  const allUnits: Unit[] = [];
+
+  for (const dept of departments) {
+    const created = await prisma.department.create({
+      data: {
+        name: dept.name,
+        divisions: {
+          create: dept.divisions.map((div) => ({
+            name: div.name,
+            units: { create: div.units.map((u) => ({ name: u })) },
+          })),
+        },
+      },
+      include: { divisions: { include: { units: true } } },
+    });
+    allUnits.push(...created.divisions.flatMap((d) => d.units));
+  }
+
+  console.log(`[seed] Created ${departments.length} fallback departments, ${allUnits.length} units total`);
   return allUnits;
 }

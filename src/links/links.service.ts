@@ -22,7 +22,12 @@ export class LinksService {
 
   create(dto: CreateLinkDto) {
     return this.prisma.link.create({
-      data: { name: dto.name, url: dto.url },
+      data: {
+        name: dto.name,
+        url: dto.url,
+        apiUrl: dto.apiUrl ?? null,
+        systemType: dto.systemType ?? 'FRONTEND',
+      },
     });
   }
 
@@ -50,8 +55,8 @@ export class LinksService {
   }
 
   /**
-   * Grid summary: maintenance → no ping; otherwise always one live ping (fresh state).
-   * Persisted logs are for the detail page / audit only.
+   * Grid summary: maintenance → no ping; otherwise pings both dashboard & API URLs.
+   * Returns combined status per link.
    */
   async statusSummary() {
     const links = await this.prisma.link.findMany({
@@ -64,14 +69,26 @@ export class LinksService {
             linkId: link.id,
             isMaintenance: true,
             isUp: null as boolean | null,
+            dashboardUp: null as boolean | null,
+            apiUp: null as boolean | null,
+            hasApiUrl: !!link.apiUrl,
             checkedAt: null as string | null,
           };
         }
-        const ping = await this.pingUrl(link.url);
+        const [dashboardPing, apiPing] = await Promise.all([
+          this.pingUrl(link.url),
+          link.apiUrl ? this.pingUrl(link.apiUrl) : Promise.resolve(null),
+        ]);
+        const dashboardUp = dashboardPing.ok;
+        const apiUp = apiPing?.ok ?? null;
+        const isUp = link.apiUrl ? dashboardUp && apiUp! : dashboardUp;
         return {
           linkId: link.id,
           isMaintenance: false,
-          isUp: ping.ok,
+          isUp,
+          dashboardUp,
+          apiUp,
+          hasApiUrl: !!link.apiUrl,
           checkedAt: new Date().toISOString(),
         };
       }),
@@ -82,11 +99,23 @@ export class LinksService {
   async pingById(id: string) {
     const link = await this.prisma.link.findUnique({
       where: { id },
-      select: { id: true, url: true },
+      select: { id: true, url: true, apiUrl: true },
     });
     if (!link) throw new NotFoundException();
-    const ping = await this.pingUrl(link.url);
-    return { id: link.id, ok: ping.ok };
+    const [dashboardPing, apiPing] = await Promise.all([
+      this.pingUrl(link.url),
+      link.apiUrl ? this.pingUrl(link.apiUrl) : Promise.resolve(null),
+    ]);
+    const dashboardUp = dashboardPing.ok;
+    const apiUp = apiPing?.ok ?? null;
+    const isUp = link.apiUrl ? dashboardUp && apiUp! : dashboardUp;
+    return {
+      id: link.id,
+      ok: isUp,
+      dashboardUp,
+      apiUp,
+      hasApiUrl: !!link.apiUrl,
+    };
   }
 
   async getDetails(id: string, limit: number) {
@@ -121,17 +150,32 @@ export class LinksService {
   async checkAndLog(id: string) {
     const link = await this.prisma.link.findUnique({ where: { id } });
     if (!link) throw new NotFoundException();
-    const ping = await this.pingUrl(link.url);
+    const [dashboardPing, apiPing] = await Promise.all([
+      this.pingUrl(link.url),
+      link.apiUrl ? this.pingUrl(link.apiUrl) : Promise.resolve(null),
+    ]);
+    const dashboardUp = dashboardPing.ok;
+    const apiUp = apiPing?.ok ?? null;
+    const isUp = link.apiUrl ? dashboardUp && apiUp! : dashboardUp;
     const log = await this.prisma.linkStatusLog.create({
       data: {
         linkId: id,
-        isUp: ping.ok,
-        statusCode: ping.statusCode,
-        responseTimeMs: ping.responseTimeMs,
-        errorMessage: ping.errorMessage,
+        isUp,
+        statusCode: dashboardPing.statusCode,
+        responseTimeMs: dashboardPing.responseTimeMs,
+        errorMessage: [
+          dashboardPing.ok ? null : `Dashboard: ${dashboardPing.errorMessage || 'down'}`,
+          apiPing && !apiPing.ok ? `API: ${apiPing.errorMessage || 'down'}` : null,
+        ].filter(Boolean).join(' | ') || null,
       },
     });
-    return { link, latestLog: log };
+    return {
+      link,
+      latestLog: log,
+      dashboardUp,
+      apiUp,
+      hasApiUrl: !!link.apiUrl,
+    };
   }
 
   async setMaintenance(id: string, isMaintenance: boolean) {

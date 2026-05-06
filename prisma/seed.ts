@@ -15,10 +15,11 @@ import * as bcrypt from 'bcrypt';
 import {
   PrismaClient,
   MaintenanceStatus,
+  SystemType,
   Prisma,
   type Prisma as PrismaJson,
 } from '@prisma/client';
-import { seedDepartmentsFromHierarchyJson } from './hierarchyFromJson';
+import { seedDepartmentsFromHierarchy } from './hierarchyFromJson';
 import { confirmDestructiveSeed } from './seedGuard';
 
 const prisma = new PrismaClient();
@@ -26,11 +27,14 @@ const SALT_ROUNDS = 10;
 
 async function wipeSeedScope(tx: Prisma.TransactionClient) {
   await tx.maintenanceRecord.deleteMany();
+  await tx.deviceAssignment.deleteMany();
+  await tx.deviceItem.deleteMany();
   await tx.device.deleteMany();
   await tx.unit.deleteMany();
   await tx.division.deleteMany();
   await tx.department.deleteMany();
   await tx.category.deleteMany();
+  await tx.deviceType.deleteMany();
   await tx.link.deleteMany();
 }
 
@@ -52,117 +56,238 @@ async function main() {
     });
   }
 
-  /** أقسام / شعب / وحدات من prisma/data/employes2-unique-hierarchy.json. افتراضياً: استبعاد مسارات (المنقطعين عن العمل). لتضمينها: SEED_INCLUDE_INACTIVE_HIERARCHY=1 */
-  const includeInactiveHierarchy =
-    process.env.SEED_INCLUDE_INACTIVE_HIERARCHY === '1' ||
-    process.env.SEED_INCLUDE_INACTIVE_HIERARCHY === 'true';
-  const allUnits = await seedDepartmentsFromHierarchyJson(prisma, {
-    excludeInactive: !includeInactiveHierarchy,
-  });
+  const allUnits = await seedDepartmentsFromHierarchy(prisma);
 
-  const categories = await Promise.all([
-    prisma.category.create({
-      data: { name: 'مضخات ومحركات' },
+  const deviceTypes = await Promise.all([
+    prisma.deviceType.create({
+      data: {
+        name: 'معدات ميكانيكية',
+        categories: {
+          create: [
+            { name: 'مضخات ومحركات' },
+            { name: 'توربينات وضواغط' },
+            { name: 'معدات لحام' },
+          ],
+        },
+      },
+      include: { categories: true },
     }),
-    prisma.category.create({
-      data: { name: 'تكييف وتبريد' },
+    prisma.deviceType.create({
+      data: {
+        name: 'تكييف وتبريد',
+        categories: {
+          create: [
+            { name: 'وحدات تكييف' },
+            { name: 'أبراج تبريد' },
+            { name: 'مبردات مياه' },
+          ],
+        },
+      },
+      include: { categories: true },
     }),
-    prisma.category.create({
-      data: { name: 'أنظمة تحكم وPLC' },
+    prisma.deviceType.create({
+      data: {
+        name: 'أنظمة تحكم وPLC',
+        categories: {
+          create: [
+            { name: 'وحدات PLC' },
+            { name: 'حساسات ومقاييس' },
+            { name: 'لوحات تحكم' },
+          ],
+        },
+      },
+      include: { categories: true },
     }),
-    prisma.category.create({
-      data: { name: 'معدات ثقيلة' },
+    prisma.deviceType.create({
+      data: {
+        name: 'معدات ثقيلة',
+        categories: {
+          create: [
+            { name: 'رافعات وشواحن' },
+            { name: 'معدات نقل' },
+            { name: 'معدات حفريات' },
+          ],
+        },
+      },
+      include: { categories: true },
     }),
-    prisma.category.create({
-      data: { name: 'شبكات وأمن معلومات' },
+    prisma.deviceType.create({
+      data: {
+        name: 'شبكات وتقنية معلومات',
+        categories: {
+          create: [
+            { name: 'خوادم وتخزين' },
+            { name: 'معدات شبكات' },
+            { name: 'أجهزة حاسب' },
+            { name: 'كاميرات مراقبة' },
+          ],
+        },
+      },
+      include: { categories: true },
     }),
   ]);
 
+  // Flatten all categories for device seeding
+  const categories = deviceTypes.flatMap((dt) => dt.categories);
+
   const pick = <T>(arr: T[], i: number) => arr[i % arr.length];
 
+  // Seed devices as products with multiple items each
   const deviceSpecs: Array<{
-    serial: string;
-    unitIndex: number;
+    name: string;
     categoryIndex: number;
+    nature: 'FIXED' | 'CONSUMABLE';
     notes: string;
+    serials: string[];
+    assignToUnitIndex?: number; // first serial gets assigned to this unit
   }> = [
     {
-      serial: 'MECH-ASM-2024-001',
-      unitIndex: 0,
+      name: 'مضخة دوران رئيسية',
       categoryIndex: 0,
-      notes: 'مضخة دوران رئيسية — صيانة دورية كل 90 يومًا',
+      nature: 'FIXED',
+      notes: 'صيانة دورية كل 90 يومًا',
+      serials: ['MECH-ASM-2024-001', 'MECH-ASM-2024-002', 'MECH-ASM-2024-003'],
+      assignToUnitIndex: 0,
     },
     {
-      serial: 'MECH-ASM-2024-002',
-      unitIndex: 1,
+      name: 'رافعة شوكية',
       categoryIndex: 3,
-      notes: 'رافعة شوكية — بطارية ليثيوم',
+      nature: 'FIXED',
+      notes: 'بطارية ليثيوم',
+      serials: ['MECH-HEV-2024-001', 'MECH-HEV-2024-002'],
+      assignToUnitIndex: 1,
     },
     {
-      serial: 'PKG-LINE-2023-018',
-      unitIndex: 2,
+      name: 'وحدة تحكم تعبئة',
       categoryIndex: 2,
+      nature: 'FIXED',
       notes: 'وحدة تحكم تعبئة أوتوماتيكية',
+      serials: ['PLC-CTL-2023-018'],
+      assignToUnitIndex: 2,
     },
     {
-      serial: 'HVAC-CT-2024-007',
-      unitIndex: 3,
+      name: 'مروحة برج تبريد',
       categoryIndex: 1,
-      notes: 'مروحة برج تبريد — اهتزاز خفيف تحت المراقبة',
+      nature: 'FIXED',
+      notes: 'اهتزاز خفيف تحت المراقبة',
+      serials: ['HVAC-CT-2024-007', 'HVAC-CT-2024-008'],
+      assignToUnitIndex: 3,
     },
     {
-      serial: 'HVAC-PMP-2024-003',
-      unitIndex: 4,
+      name: 'مضخة تدوير مياه التبريد',
       categoryIndex: 0,
+      nature: 'FIXED',
       notes: 'مضخة تدوير مياه التبريد',
+      serials: ['HVAC-PMP-2024-003'],
+      assignToUnitIndex: 4,
     },
     {
-      serial: 'IT-SRV-2022-041',
-      unitIndex: 5,
+      name: 'خادم تخزين',
       categoryIndex: 4,
-      notes: 'خادم تخزين — RAID صحي',
+      nature: 'FIXED',
+      notes: 'RAID صحي',
+      serials: ['IT-SRV-2022-041', 'IT-SRV-2022-042', 'IT-SRV-2022-043'],
+      assignToUnitIndex: 5,
     },
     {
-      serial: 'IT-NET-2023-012',
-      unitIndex: 6,
+      name: 'محول شبكة لب',
       categoryIndex: 4,
-      notes: 'محول لب — تحديث برنامج مجدول',
+      nature: 'FIXED',
+      notes: 'تحديث برنامج مجدول',
+      serials: ['IT-NET-2023-012'],
+      assignToUnitIndex: 6,
     },
     {
-      serial: 'MECH-WLD-2024-005',
-      unitIndex: 1,
-      categoryIndex: 3,
-      notes: 'منظم غاز لحام — فحص تسرب ربع سنوي',
+      name: 'منظم غاز لحام',
+      categoryIndex: 2,
+      nature: 'CONSUMABLE',
+      notes: 'فحص تسرب ربع سنوي',
+      serials: ['MECH-WLD-2024-005', 'MECH-WLD-2024-006'],
+      assignToUnitIndex: 1,
     },
   ];
 
-  const devices = await Promise.all(
-    deviceSpecs.map((spec) =>
-      prisma.device.create({
-        data: {
-          serialNumber: spec.serial,
-          unitId: pick(allUnits, spec.unitIndex).id,
-          categoryId: pick(categories, spec.categoryIndex).id,
-          notes: spec.notes,
+  const devices = [];
+  const allItems: { id: string; serialNumber: string }[] = [];
+
+  for (const spec of deviceSpecs) {
+    const device = await prisma.device.create({
+      data: {
+        name: spec.name,
+        categoryId: pick(categories, spec.categoryIndex).id,
+        nature: spec.nature,
+        notes: spec.notes,
+        items: {
+          create: spec.serials.map((s) => ({ serialNumber: s })),
         },
-      }),
-    ),
-  );
+      },
+      include: { items: true },
+    });
+    devices.push(device);
+    allItems.push(...device.items);
+  }
+
+  // Assign first items of some devices to units
+  for (const spec of deviceSpecs) {
+    if (spec.assignToUnitIndex !== undefined) {
+      const device = devices.find(
+        (d) => d.name === spec.name,
+      );
+      if (!device || device.items.length === 0) continue;
+      const item = device.items[0];
+      const unit = pick(allUnits, spec.assignToUnitIndex);
+      await prisma.deviceAssignment.create({
+        data: { itemId: item.id, unitId: unit.id },
+      });
+      await prisma.deviceItem.update({
+        where: { id: item.id },
+        data: { status: 'ASSIGNED' },
+      });
+    }
+  }
 
   await prisma.link.createMany({
     data: [
-      { name: 'الرقيب', url: 'http://10.10.10.180:9512/' },
-      { name: 'إسكان الموظفين', url: 'http://10.10.10.181:22266/' },
-      { name: 'نظام الادارة المالية', url: 'http://10.10.10.181:22248/' },
-      {
-        name: 'نظام العلاوات والترفيعات',
-        url: 'http://10.10.10.181:22238/',
-      },
-      { name: 'إيوان', url: 'http://10.10.10.181:22240/login' },
-      { name: 'البرهان', url: 'http://10.10.10.181:22246/' },
-      { name: 'الجوار', url: 'http://10.10.10.181:22268/' },
-      { name: 'استمارات', url: 'http://10.10.10.180:22244/' },
-      { name: 'المؤتمن', url: 'http://10.10.10.180:22234/' },
+      { name: 'الرقيب', url: 'http://10.10.10.180:9512/', systemType: 'API' },
+      { name: 'إسكان الموظفين', url: 'http://10.10.10.181:22266/', systemType: 'FRONTEND' },
+      { name: 'استمارات', url: 'http://10.10.10.181:22244/', systemType: 'FRONTEND' },
+      { name: 'نظام العلاوات', url: 'http://10.10.10.181:22238/', systemType: 'FRONTEND' },
+      { name: 'الجوار', url: 'http://10.10.10.181:22267/', systemType: 'FRONTEND' },
+      { name: 'إيوان', url: 'http://10.10.10.181:22240/', systemType: 'FRONTEND' },
+      { name: 'البرهان', url: 'http://10.10.10.181:22246/', systemType: 'FRONTEND' },
+      { name: 'نظام الادارة المالية', url: 'http://10.10.10.181:22248/', systemType: 'FRONTEND' },
+      { name: 'المؤتمن', url: 'http://10.10.10.181:22234/', systemType: 'FRONTEND' },
+      { name: 'سكنة الخدم', url: 'http://10.10.10.181:22265/', systemType: 'API' },
+      { name: 'المحاسبة API', url: 'http://10.10.10.181:22247/', systemType: 'API' },
+      { name: 'الميزانية', url: 'http://10.10.10.181:22256/', systemType: 'FRONTEND' },
+      { name: 'التصدير API', url: 'http://10.10.10.181:22257/', systemType: 'API' },
+      { name: 'التصدير', url: 'http://10.10.10.181:22258/', systemType: 'FRONTEND' },
+      { name: 'عيادة الأسنان', url: 'http://10.10.10.181:22282/', systemType: 'FRONTEND' },
+      { name: 'عيادة العيون', url: 'http://10.10.10.181:22281/', systemType: 'FRONTEND' },
+      { name: 'استمارات API', url: 'http://10.10.10.181:22243/', systemType: 'API' },
+      { name: 'المستشفى', url: 'http://10.10.10.181:22280/', systemType: 'FRONTEND' },
+      { name: 'لوحة تحكم الإسكان', url: 'http://10.10.10.181:22240/', systemType: 'FRONTEND' },
+      { name: 'الموارد البشرية', url: 'http://10.10.10.181:22246/', systemType: 'FRONTEND' },
+      { name: 'الموارد البشرية API', url: 'http://10.10.10.181:22245/', systemType: 'API' },
+      { name: 'المخزون API', url: 'http://10.10.10.181:22251/', systemType: 'API' },
+      { name: 'إدارة المخزون', url: 'http://10.10.10.181:22252/', systemType: 'FRONTEND' },
+      { name: 'الشؤون القانونية API', url: 'http://10.10.10.181:22259/', systemType: 'API' },
+      { name: 'الشؤون القانونية', url: 'http://10.10.10.181:22260/', systemType: 'FRONTEND' },
+      { name: 'الأشخاص المفقودين', url: 'http://10.10.10.181:4000/', systemType: 'FRONTEND' },
+      { name: 'الصيانة API', url: 'http://10.10.10.181:22273/', systemType: 'API' },
+      { name: 'الصيانة', url: 'http://10.10.10.181:22274/', systemType: 'FRONTEND' },
+      { name: 'البوابة الإسلامية', url: 'http://10.10.10.181:22254/', systemType: 'FRONTEND' },
+      { name: 'المتحف API', url: 'http://10.10.10.181:22269/', systemType: 'API' },
+      { name: 'المتحف', url: 'http://10.10.10.181:22270/', systemType: 'FRONTEND' },
+      { name: 'الرواتب API', url: 'http://10.10.10.181:22235/', systemType: 'API' },
+      { name: 'الرواتب', url: 'http://10.10.10.181:22236/', systemType: 'FRONTEND' },
+      { name: 'المشتريات API', url: 'http://10.10.10.181:22261/', systemType: 'API' },
+      { name: 'المشتريات', url: 'http://10.10.10.181:22262/', systemType: 'FRONTEND' },
+      { name: 'الترقيات API', url: 'http://10.10.10.181:22237/', systemType: 'API' },
+      { name: 'السكرتارية', url: 'http://10.10.10.181:22272/', systemType: 'FRONTEND' },
+      { name: 'مركز الأدوات', url: 'http://10.10.10.181:22292/', systemType: 'FRONTEND' },
+      { name: 'التطوع API', url: 'http://10.10.10.181:22241/', systemType: 'API' },
+      { name: 'التطوع', url: 'http://10.10.10.181:22242/', systemType: 'FRONTEND' },
     ],
   });
 
@@ -234,14 +359,14 @@ async function main() {
   baseDate.setMonth(baseDate.getMonth() - 4);
 
   for (let i = 0; i < 15; i++) {
-    const device = pick(devices, i);
+    const item = pick(allItems, i);
     const dayOffset = 3 + i * 7 + (i % 5);
     const date = new Date(baseDate);
     date.setDate(date.getDate() + dayOffset);
 
     await prisma.maintenanceRecord.create({
       data: {
-        deviceId: device.id,
+        itemId: item.id,
         description: descriptions[i]!,
         technicianName: pick(technicians, i),
         status: statuses[i]!,

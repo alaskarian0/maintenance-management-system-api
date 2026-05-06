@@ -1,6 +1,9 @@
+import { DeviceNature } from '@prisma/client';
+
 export class CreateDeviceDto {
-  serialNumber: string;
+  name?: string;
   categoryId: string;
-  unitId: string;
+  nature?: DeviceNature;
   notes?: string;
+  serialNumbers?: string[];
 }

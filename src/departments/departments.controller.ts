@@ -13,6 +13,11 @@ export class DepartmentsController {
     return this.departmentsService.findAll();
   }
 
+  @Post('sync')
+  syncFromExternal() {
+    return this.departmentsService.syncFromExternal();
+  }
+
   @Post()
   createDepartment(@Body() dto: CreateDepartmentDto) {
     return this.departmentsService.createDepartment(dto);

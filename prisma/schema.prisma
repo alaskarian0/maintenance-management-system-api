@@ -7,11 +7,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum SystemType {
+  FRONTEND
+  API
+}
+
 model Link {
   id            String          @id @default(cuid())
   name          String
   url           String
+  apiUrl        String?
   isMaintenance Boolean         @default(false)
+  systemType    SystemType      @default(FRONTEND)
   createdAt     DateTime        @default(now())
   statusLogs    LinkStatusLog[]
 }
@@ -42,14 +49,15 @@ enum UserRole {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  userName     String   @unique
-  fullName     String
-  passwordHash String
-  role         UserRole @default(USER)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String         @id @default(cuid())
+  userName      String         @unique
+  fullName      String
+  passwordHash  String
+  role          UserRole       @default(USER)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  notifications Notification[]
 }
 
 model Department {
@@ -71,52 +79,205 @@ model Division {
 }
 
 model Unit {
-  id         String   @id @default(cuid())
-  name       String
-  division   Division @relation(fields: [divisionId], references: [id], onDelete: Cascade)
-  divisionId String
-  devices    Device[]
-  createdAt  DateTime @default(now())
+  id          String             @id @default(cuid())
+  name        String
+  division    Division           @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+  divisionId  String
+  assignments DeviceAssignment[]
+  createdAt   DateTime           @default(now())
 
   @@unique([name, divisionId])
 }
 
+model DeviceType {
+  id         String     @id @default(cuid())
+  name       String     @unique
+  categories Category[]
+  createdAt  DateTime   @default(now())
+}
+
 model Category {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  devices   Device[]
-  createdAt DateTime @default(now())
+  id           String     @id @default(cuid())
+  name         String
+  deviceType   DeviceType @relation(fields: [deviceTypeId], references: [id], onDelete: Cascade)
+  deviceTypeId String
+  devices      Device[]
+  createdAt    DateTime   @default(now())
+
+  @@unique([name, deviceTypeId])
+}
+
+enum DeviceNature {
+  CONSUMABLE
+  FIXED
 }
 
 model Device {
-  id                 String              @id @default(cuid())
-  serialNumber       String              @unique
-  category           Category            @relation(fields: [categoryId], references: [id])
-  categoryId         String
-  unit               Unit                @relation(fields: [unitId], references: [id])
-  unitId             String
-  notes              String?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  maintenanceRecords MaintenanceRecord[]
+  id         String       @id @default(cuid())
+  name       String?
+  category   Category     @relation(fields: [categoryId], references: [id])
+  categoryId String
+  nature     DeviceNature @default(FIXED)
+  notes      String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  items      DeviceItem[]
+}
+
+enum DeviceItemStatus {
+  AVAILABLE
+  ASSIGNED
+  DEFECTIVE
+}
+
+model DeviceItem {
+  id                   String               @id @default(cuid())
+  serialNumber         String               @unique
+  device               Device               @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  deviceId             String
+  status               DeviceItemStatus     @default(AVAILABLE)
+  assignment           DeviceAssignment?
+  maintenanceRecords   MaintenanceRecord[]
+  maintenanceRequests  MaintenanceRequest[]
+  warrantyExpiry       DateTime?
+  purchaseDate         DateTime?
+  supplier             String?
+  contractDetails      String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+}
+
+model DeviceAssignment {
+  id           String     @id @default(cuid())
+  item         DeviceItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId       String     @unique
+  unit         Unit       @relation(fields: [unitId], references: [id])
+  unitId       String
+  recipientName String?
+  assignedAt   DateTime   @default(now())
+  returnedAt   DateTime?
 }
 
 model MaintenanceRecord {
-  id             String            @id @default(cuid())
-  device         Device            @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  deviceId       String
-  description    String
-  technicianName String
-  status         MaintenanceStatus @default(OPEN)
-  date           DateTime
+  id              String           @id @default(cuid())
+  item            DeviceItem       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId          String
+  description     String
+  technicianName  String
+  status          MaintenanceStatus @default(OPEN)
+  date            DateTime
   /// [{ "name": string, "quantity": number }, ...]
-  partsUsed      Json?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  partsUsed       Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  sparePartUsages SparePartUsage[]
 }
 
 enum MaintenanceStatus {
   OPEN
   IN_PROGRESS
   RESOLVED
+}
+
+enum FingerprintPersonType {
+  EMPLOYEE
+  RESIDENT
+}
+
+model FingerprintRecord {
+  id         String                @id @default(cuid())
+  personType FingerprintPersonType @default(EMPLOYEE)
+  name       String
+  personId   Int?
+  region     String?
+  note       String?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  relatedId String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userName  String
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt(sort: Desc)])
+}
+
+enum MaintenanceRequestStatus {
+  PENDING
+  APPROVED
+  ASSIGNED
+  RESOLVED
+  REJECTED
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model MaintenanceRequest {
+  id           String                   @id @default(cuid())
+  deviceItem   DeviceItem               @relation(fields: [deviceItemId], references: [id], onDelete: Cascade)
+  deviceItemId String
+  description  String
+  priority     MaintenancePriority      @default(MEDIUM)
+  status       MaintenanceRequestStatus @default(PENDING)
+  requestedBy  String
+  approvedBy   String?
+  assignedTo   String?
+  notes        String?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([assignedTo, status])
+}
+
+model SparePart {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  partNumber  String?
+  quantity    Int              @default(0)
+  minQuantity Int              @default(5)
+  category    String?
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  usages      SparePartUsage[]
+}
+
+model SparePartUsage {
+  id                String            @id @default(cuid())
+  sparePart         SparePart         @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+  sparePartId       String
+  maintenanceRecord MaintenanceRecord @relation(fields: [maintenanceId], references: [id], onDelete: Cascade)
+  maintenanceId     String
+  quantityUsed      Int
+  usedAt            DateTime          @default(now())
+
+  @@index([maintenanceId])
+  @@index([sparePartId])
 }
