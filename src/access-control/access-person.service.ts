@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService, DeviceUserInfo } from './access-fallback.service';
+import { AccessBiometricService } from './access-biometric.service';
 import { QueryPersonDto } from './dto/query-person.dto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -69,6 +70,7 @@ export class AccessPersonService {
   constructor(
     private prisma: PrismaService,
     private fallback: AccessFallbackService,
+    private biometric: AccessBiometricService,
   ) {}
 
   async findAll(query: QueryPersonDto) {
@@ -175,6 +177,16 @@ export class AccessPersonService {
     // Process online devices
     for (const door of onlineDoors) {
       try {
+        // Save biometric templates before blocking (best-effort)
+        try {
+          const pulled = await this.biometric.pullAndStoreTemplates(person.id, door.ipAddress!);
+          if (pulled.fingers > 0) {
+            this.logger.log(`Saved ${pulled.fingers} fingerprint templates from ${door.name} before blocking`);
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to pull templates from ${door.name}: ${err instanceof Error ? err.message : err}`);
+        }
+
         const removed = await this.fallback.deleteUserFromDevice(door.ipAddress!, uid, person.name);
         if (removed) {
           success++;
@@ -229,6 +241,16 @@ export class AccessPersonService {
         if (pushed) {
           success++;
           this.logger.log(`Pushed "${person.name}" to device ${door.name} (${door.ipAddress})`);
+
+          // Restore biometric templates (best-effort)
+          try {
+            const restored = await this.biometric.restoreTemplates(person.id, door.ipAddress!);
+            if (restored.fingers > 0) {
+              this.logger.log(`Restored ${restored.fingers} fingerprints for "${person.name}" on ${door.name}`);
+            }
+          } catch (err) {
+            this.logger.warn(`Failed to restore templates on ${door.name}: ${err instanceof Error ? err.message : err}`);
+          }
         } else {
           failed++;
           details.push(`فشل الإرسال إلى ${door.name}`);

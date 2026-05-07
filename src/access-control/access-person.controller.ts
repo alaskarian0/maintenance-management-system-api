@@ -7,15 +7,22 @@ import {
   Param,
   Body,
   Query,
+  NotFoundException,
 } from '@nestjs/common';
 import { AccessPersonService } from './access-person.service';
+import { AccessBiometricService } from './access-biometric.service';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { UpdatePersonDto } from './dto/update-person.dto';
 import { QueryPersonDto } from './dto/query-person.dto';
+import { PrismaService } from '../prisma.service';
 
 @Controller('access-control/persons')
 export class AccessPersonController {
-  constructor(private readonly personService: AccessPersonService) {}
+  constructor(
+    private readonly personService: AccessPersonService,
+    private readonly biometricService: AccessBiometricService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get()
   findAll(@Query() query: QueryPersonDto) {
@@ -50,6 +57,27 @@ export class AccessPersonController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.personService.findOne(id);
+  }
+
+  @Post(':id/transfer-biometric/:targetDoorId')
+  async transferBiometric(
+    @Param('id') personId: string,
+    @Param('targetDoorId') targetDoorId: string,
+  ) {
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const door = await this.prisma.accessDoor.findUnique({ where: { id: targetDoorId } });
+    if (!door) throw new NotFoundException('Target door not found');
+    if (!door.ipAddress) throw new NotFoundException('Target door has no IP address');
+
+    const result = await this.biometricService.transferTemplates(personId, door.ipAddress);
+    return {
+      person: person.name,
+      door: door.name,
+      fingersTransferred: result.fingers,
+      faceTransferred: result.face,
+    };
   }
 
   @Post()
