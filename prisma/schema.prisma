@@ -296,6 +296,7 @@ model AccessDoor {
   updatedAt    DateTime @updatedAt
   permissions  AccessPermission[]
   logs         AccessLog[]
+  pendingOps   PendingDeviceOp[]
 }
 
 model AccessPerson {
@@ -312,11 +313,14 @@ model AccessPerson {
   faceStatus       String                @default("none")
   enrollDevice     String?
   lastSyncAt       DateTime?
+  fingerprintTemplates Json?              // Stored biometric templates: { fingers: [{ fid, valid, template_base64 }], face: null, pulledFrom, pulledAt }
+  faceTemplates        Json?              // Face template data if available
   isActive         Boolean               @default(true)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   permissions      AccessPermission[]
   logs             AccessLog[]
+  pendingOps       PendingDeviceOp[]
 }
 
 model AccessPermission {
@@ -346,4 +350,26 @@ model AccessLog {
 
   @@index([doorId, punchTime(sort: Desc)])
   @@index([personId, punchTime(sort: Desc)])
+}
+
+model PendingDeviceOp {
+  id          String   @id @default(cuid())
+  personId    String
+  personName  String
+  type        String   // "block", "push", "update"
+  doorId      String
+  doorName    String
+  doorIp      String
+  uid         Int
+  empCode     String   @default("")
+  status      String   @default("pending") // pending, in_progress, success, failed
+  retries     Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  person      AccessPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  door        AccessDoor   @relation(fields: [doorId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
 }

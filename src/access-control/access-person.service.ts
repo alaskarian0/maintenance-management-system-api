@@ -13,19 +13,6 @@ export interface EmployeeEntry {
   'الوجبة': string | null;
 }
 
-interface PendingDeviceOp {
-  personId: string;
-  personName: string;
-  type: 'block' | 'push' | 'update';
-  doorId: string;
-  doorName: string;
-  doorIp: string;
-  uid: number;
-  empCode: string;
-  createdAt: Date;
-  retries: number;
-}
-
 export interface ResidentEntry {
   id: number;
   fullName: string;
@@ -78,16 +65,11 @@ export class AccessPersonService {
   private residentsCache: ResidentEntry[] | null = null;
   private residentsCacheAt = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000;
-  private pendingOps: PendingDeviceOp[] = [];
 
   constructor(
     private prisma: PrismaService,
     private fallback: AccessFallbackService,
   ) {}
-
-  get pendingOperations() {
-    return [...this.pendingOps];
-  }
 
   async findAll(query: QueryPersonDto) {
     const {
@@ -200,19 +182,19 @@ export class AccessPersonService {
         } else {
           failed++;
           details.push(`فشل الحظر على ${door.name}`);
-          this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
         }
       } catch {
         failed++;
         details.push(`خطأ على ${door.name}`);
-        this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
       }
     }
 
     // Queue offline devices for retry
     for (const door of offlineDoors) {
       details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-      this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
+      await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
     }
 
     return { success, failed, details };
@@ -239,7 +221,7 @@ export class AccessPersonService {
       if (!door?.ipAddress) continue;
       if (door.state !== 1) {
         details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-        this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
         continue;
       }
       try {
@@ -250,12 +232,12 @@ export class AccessPersonService {
         } else {
           failed++;
           details.push(`فشل الإرسال إلى ${door.name}`);
-          this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
         }
       } catch {
         failed++;
         details.push(`خطأ على ${door.name}`);
-        this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
       }
     }
 
@@ -276,7 +258,7 @@ export class AccessPersonService {
       if (!door.ipAddress) continue;
       if (door.state !== 1) {
         details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-        this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
         continue;
       }
       try {
@@ -287,52 +269,72 @@ export class AccessPersonService {
         } else {
           failed++;
           details.push(`فشل التحديث على ${door.name}`);
-          this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
         }
       } catch {
         failed++;
         details.push(`خطأ على ${door.name}`);
-        this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
       }
     }
 
     return { success, failed, details };
   }
 
-  private enqueueOp(op: PendingDeviceOp) {
-    // Avoid duplicates for same person+door+type
-    const exists = this.pendingOps.find(
-      (p) => p.personId === op.personId && p.doorId === op.doorId && p.type === op.type,
-    );
-    if (!exists) {
-      this.pendingOps.push(op);
+  private async enqueueOp(op: { personId: string; personName: string; type: 'block' | 'push' | 'update'; doorId: string; doorName: string; doorIp: string; uid: number; empCode: string }) {
+    const existing = await this.prisma.pendingDeviceOp.findFirst({
+      where: { personId: op.personId, doorId: op.doorId, type: op.type, status: { in: ['pending', 'in_progress'] } },
+    });
+    if (!existing) {
+      await this.prisma.pendingDeviceOp.create({
+        data: {
+          personId: op.personId,
+          personName: op.personName,
+          type: op.type,
+          doorId: op.doorId,
+          doorName: op.doorName,
+          doorIp: op.doorIp,
+          uid: op.uid,
+          empCode: op.empCode,
+          status: 'pending',
+        },
+      });
       this.logger.warn(`Queued ${op.type} for "${op.personName}" on ${op.doorName} (offline)`);
     }
   }
 
   async retryPendingOperations(): Promise<{ retried: number; succeeded: number; removed: number }> {
-    if (this.pendingOps.length === 0) return { retried: 0, succeeded: 0, removed: 0 };
+    const pending = await this.prisma.pendingDeviceOp.findMany({
+      where: { status: { in: ['pending', 'in_progress'] } },
+      orderBy: { createdAt: 'asc' },
+    });
 
-    this.logger.log(`Retrying ${this.pendingOps.length} pending device operations...`);
-    const remaining: PendingDeviceOp[] = [];
+    if (pending.length === 0) return { retried: 0, succeeded: 0, removed: 0 };
+
+    this.logger.log(`Retrying ${pending.length} pending device operations...`);
     let succeeded = 0;
     let removed = 0;
 
-    for (const op of this.pendingOps) {
-      // Check if device is now online
+    for (const op of pending) {
       const door = await this.prisma.accessDoor.findUnique({ where: { id: op.doorId } });
       if (!door || door.state !== 1) {
-        op.retries++;
-        if (op.retries > 20) {
+        const newRetries = op.retries + 1;
+        if (newRetries > 20) {
+          await this.prisma.pendingDeviceOp.update({
+            where: { id: op.id },
+            data: { status: 'failed', retries: newRetries, lastError: 'جهاز غير متصل - تم تجاوز عدد المحاولات' },
+          });
           removed++;
           this.logger.warn(`Dropping stale ${op.type} for "${op.personName}" on ${op.doorName} (too many retries)`);
-          continue;
+        } else {
+          await this.prisma.pendingDeviceOp.update({
+            where: { id: op.id },
+            data: { retries: newRetries },
+          });
         }
-        remaining.push(op);
         continue;
       }
 
-      // Check if person still exists and is active (for push/update)
       const person = await this.prisma.accessPerson.findUnique({ where: { id: op.personId } });
 
       try {
@@ -341,6 +343,10 @@ export class AccessPersonService {
           ok = await this.fallback.deleteUserFromDevice(op.doorIp, op.uid, op.personName);
         } else if (op.type === 'push' || op.type === 'update') {
           if (!person || !person.isActive) {
+            await this.prisma.pendingDeviceOp.update({
+              where: { id: op.id },
+              data: { status: 'failed', lastError: 'الشخص غير موجود أو غير مفعّل' },
+            });
             removed++;
             continue;
           }
@@ -348,28 +354,64 @@ export class AccessPersonService {
         }
 
         if (ok) {
+          await this.prisma.pendingDeviceOp.update({
+            where: { id: op.id },
+            data: { status: 'success' },
+          });
           succeeded++;
           this.logger.log(`Retry ${op.type} succeeded for "${op.personName}" on ${op.doorName}`);
         } else {
-          op.retries++;
-          if (op.retries > 20) {
+          const newRetries = op.retries + 1;
+          if (newRetries > 20) {
+            await this.prisma.pendingDeviceOp.update({
+              where: { id: op.id },
+              data: { status: 'failed', retries: newRetries, lastError: 'فشلت العملية' },
+            });
             removed++;
           } else {
-            remaining.push(op);
+            await this.prisma.pendingDeviceOp.update({
+              where: { id: op.id },
+              data: { retries: newRetries, lastError: 'فشلت العملية' },
+            });
           }
         }
-      } catch {
-        op.retries++;
-        if (op.retries > 20) {
+      } catch (err) {
+        const newRetries = op.retries + 1;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (newRetries > 20) {
+          await this.prisma.pendingDeviceOp.update({
+            where: { id: op.id },
+            data: { status: 'failed', retries: newRetries, lastError: errMsg },
+          });
           removed++;
         } else {
-          remaining.push(op);
+          await this.prisma.pendingDeviceOp.update({
+            where: { id: op.id },
+            data: { retries: newRetries, lastError: errMsg },
+          });
         }
       }
     }
 
-    this.pendingOps = remaining;
-    return { retried: this.pendingOps.length + succeeded + removed, succeeded, removed };
+    const remaining = await this.prisma.pendingDeviceOp.count({
+      where: { status: { in: ['pending', 'in_progress'] } },
+    });
+
+    return { retried: pending.length, succeeded, removed };
+  }
+
+  async getPendingOps() {
+    return this.prisma.pendingDeviceOp.findMany({
+      where: { status: { in: ['pending', 'in_progress', 'failed'] } },
+      orderBy: { createdAt: 'desc' },
+      include: { door: { select: { name: true, state: true } } },
+    });
+  }
+
+  async getPendingOpsCount() {
+    return this.prisma.pendingDeviceOp.count({
+      where: { status: { in: ['pending', 'in_progress'] } },
+    });
   }
 
   async remove(id: string) {

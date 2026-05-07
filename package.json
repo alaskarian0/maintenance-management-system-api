@@ -26,7 +26,8 @@
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
     "super-template": "file:../../super-template",
-    "zk-attendance-sdk": "^2.1.0"
+    "zk-attendance-sdk": "^2.1.0",
+    "zklib-ts": "^1.0.6"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

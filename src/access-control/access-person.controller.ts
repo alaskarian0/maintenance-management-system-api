@@ -37,6 +37,11 @@ export class AccessPersonController {
     return this.personService.syncBiometricStatus();
   }
 
+  @Get('pending-ops')
+  getPendingOps() {
+    return this.personService.getPendingOps();
+  }
+
   @Post('sync-from-device/:doorId')
   syncFromDevice(@Param('doorId') doorId: string) {
     return this.personService.syncFromDevice(doorId);

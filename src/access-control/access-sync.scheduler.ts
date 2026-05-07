@@ -22,7 +22,6 @@ export class AccessSyncScheduler {
   get status() {
     return {
       isRunning: this.isRunning,
-      pendingOperations: this.personService.pendingOperations.length,
     };
   }
 
@@ -86,10 +85,26 @@ export class AccessSyncScheduler {
       try {
         const retryResult = await this.personService.retryPendingOperations();
         if (retryResult.succeeded > 0 || retryResult.removed > 0) {
-          this.logger.log(`Pending ops: ${retryResult.succeeded} succeeded, ${retryResult.removed} dropped, ${this.personService.pendingOperations.length} remaining`);
+          this.logger.log(`Pending ops: ${retryResult.succeeded} succeeded, ${retryResult.removed} dropped`);
         }
       } catch (err) {
         this.logger.warn(`Pending ops retry failed: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // 3. Clean up old completed operations (> 24 hours)
+      try {
+        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const deleted = await this.prisma.pendingDeviceOp.deleteMany({
+          where: {
+            status: { in: ['success', 'failed'] },
+            updatedAt: { lt: cutoff },
+          },
+        });
+        if (deleted.count > 0) {
+          this.logger.log(`Cleaned up ${deleted.count} old completed pending operations`);
+        }
+      } catch (err) {
+        this.logger.warn(`Pending ops cleanup failed: ${err instanceof Error ? err.message : err}`);
       }
     } catch (err) {
       this.logger.error(`Auto-sync error: ${err instanceof Error ? err.message : err}`);

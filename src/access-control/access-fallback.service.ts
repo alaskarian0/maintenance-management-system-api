@@ -215,4 +215,51 @@ export class AccessFallbackService {
       return null;
     }
   }
+
+  async getFingerprintTemplates(ip: string): Promise<{ uid: number; fid: number; valid: number; template_base64: string }[]> {
+    try {
+      const Zklib = require('zklib-ts/dist/index.cjs.js');
+      const zk = new Zklib(ip, 4370, 5000, 10000);
+      await zk.createSocket();
+      const templates = await zk.getTemplates();
+      await zk.disconnect();
+
+      const result: { uid: number; fid: number; valid: number; template_base64: string }[] = [];
+      const data = templates.data || templates;
+
+      for (const [userPin, fingers] of Object.entries(data)) {
+        for (const finger of (fingers as any[])) {
+          if (finger.template && finger.template.length > 0) {
+            result.push({
+              uid: finger.uid || parseInt(userPin) || 0,
+              fid: finger.fid,
+              valid: finger.valid,
+              template_base64: finger.template.toString('base64'),
+            });
+          }
+        }
+      }
+
+      this.logger.log(`Got ${result.length} fingerprint templates from ${ip}`);
+      return result;
+    } catch (err) {
+      this.logger.warn(`Failed to get templates from ${ip}: ${err instanceof Error ? err.message : err}`);
+      return [];
+    }
+  }
+
+  async uploadFingerprintTemplate(ip: string, userId: string, templateBase64: string, fid: number, valid: number): Promise<boolean> {
+    try {
+      const Zklib = require('zklib-ts/dist/index.cjs.js');
+      const zk = new Zklib(ip, 4370, 5000, 10000);
+      await zk.createSocket();
+      await zk.uploadFingerTemplate(userId, templateBase64, fid, valid);
+      await zk.disconnect();
+      this.logger.log(`Uploaded fingerprint template fid=${fid} for user ${userId} to ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to upload template to ${ip}: ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
 }
