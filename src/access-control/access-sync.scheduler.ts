@@ -22,7 +22,7 @@ export class AccessSyncScheduler {
   get status() {
     return {
       isRunning: this.isRunning,
-      pendingOperations: 0,
+      pendingOperations: this.personService.pendingOperations.length,
     };
   }
 
@@ -81,6 +81,16 @@ export class AccessSyncScheduler {
 
       const elapsed = Date.now() - startTime;
       this.logger.log(`Auto-sync completed (${elapsed}ms): ${JSON.stringify(results)}`);
+
+      // 2. Retry pending device operations
+      try {
+        const retryResult = await this.personService.retryPendingOperations();
+        if (retryResult.succeeded > 0 || retryResult.removed > 0) {
+          this.logger.log(`Pending ops: ${retryResult.succeeded} succeeded, ${retryResult.removed} dropped, ${this.personService.pendingOperations.length} remaining`);
+        }
+      } catch (err) {
+        this.logger.warn(`Pending ops retry failed: ${err instanceof Error ? err.message : err}`);
+      }
     } catch (err) {
       this.logger.error(`Auto-sync error: ${err instanceof Error ? err.message : err}`);
     } finally {

@@ -13,6 +13,19 @@ export interface EmployeeEntry {
   'الوجبة': string | null;
 }
 
+interface PendingDeviceOp {
+  personId: string;
+  personName: string;
+  type: 'block' | 'push' | 'update';
+  doorId: string;
+  doorName: string;
+  doorIp: string;
+  uid: number;
+  empCode: string;
+  createdAt: Date;
+  retries: number;
+}
+
 export interface ResidentEntry {
   id: number;
   fullName: string;
@@ -65,11 +78,16 @@ export class AccessPersonService {
   private residentsCache: ResidentEntry[] | null = null;
   private residentsCacheAt = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000;
+  private pendingOps: PendingDeviceOp[] = [];
 
   constructor(
     private prisma: PrismaService,
     private fallback: AccessFallbackService,
   ) {}
+
+  get pendingOperations() {
+    return [...this.pendingOps];
+  }
 
   async findAll(query: QueryPersonDto) {
     const {
@@ -164,28 +182,37 @@ export class AccessPersonService {
   }
 
   private async removeFromAllDevices(person: { id: string; personId: number | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
-    // Only try online devices
-    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    const allDoors = await this.prisma.accessDoor.findMany();
+    const onlineDoors = allDoors.filter(d => d.state === 1 && d.ipAddress);
+    const offlineDoors = allDoors.filter(d => d.state !== 1 && d.ipAddress);
     const uid = person.personId || 0;
     let success = 0;
     let failed = 0;
     const details: string[] = [];
 
-    for (const door of doors) {
-      if (!door.ipAddress) continue;
+    // Process online devices
+    for (const door of onlineDoors) {
       try {
-        const removed = await this.fallback.deleteUserFromDevice(door.ipAddress, uid, person.name);
+        const removed = await this.fallback.deleteUserFromDevice(door.ipAddress!, uid, person.name);
         if (removed) {
           success++;
           this.logger.log(`Blocked "${person.name}" on device ${door.name} (${door.ipAddress})`);
         } else {
           failed++;
           details.push(`فشل الحظر على ${door.name}`);
+          this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
         }
-      } catch (err) {
+      } catch {
         failed++;
-        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+        details.push(`خطأ على ${door.name}`);
+        this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
       }
+    }
+
+    // Queue offline devices for retry
+    for (const door of offlineDoors) {
+      details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
+      this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '', createdAt: new Date(), retries: 0 });
     }
 
     return { success, failed, details };
@@ -210,6 +237,11 @@ export class AccessPersonService {
 
     for (const door of doorsToPush) {
       if (!door?.ipAddress) continue;
+      if (door.state !== 1) {
+        details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
+        this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        continue;
+      }
       try {
         const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
         if (pushed) {
@@ -218,10 +250,12 @@ export class AccessPersonService {
         } else {
           failed++;
           details.push(`فشل الإرسال إلى ${door.name}`);
+          this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
         }
-      } catch (err) {
+      } catch {
         failed++;
-        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+        details.push(`خطأ على ${door.name}`);
+        this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
       }
     }
 
@@ -231,15 +265,20 @@ export class AccessPersonService {
   private async updateOnAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string; isActive: boolean }): Promise<{ success: number; failed: number; details: string[] }> {
     if (!person.isActive) return { success: 0, failed: 0, details: [] };
 
-    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    const allDoors = await this.prisma.accessDoor.findMany();
     const uid = person.personId || 0;
     const empCode = person.empCode || String(uid);
     let success = 0;
     let failed = 0;
     const details: string[] = [];
 
-    for (const door of doors) {
+    for (const door of allDoors) {
       if (!door.ipAddress) continue;
+      if (door.state !== 1) {
+        details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
+        this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
+        continue;
+      }
       try {
         const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
         if (pushed) {
@@ -248,14 +287,89 @@ export class AccessPersonService {
         } else {
           failed++;
           details.push(`فشل التحديث على ${door.name}`);
+          this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
         }
-      } catch (err) {
+      } catch {
         failed++;
-        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+        details.push(`خطأ على ${door.name}`);
+        this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode, createdAt: new Date(), retries: 0 });
       }
     }
 
     return { success, failed, details };
+  }
+
+  private enqueueOp(op: PendingDeviceOp) {
+    // Avoid duplicates for same person+door+type
+    const exists = this.pendingOps.find(
+      (p) => p.personId === op.personId && p.doorId === op.doorId && p.type === op.type,
+    );
+    if (!exists) {
+      this.pendingOps.push(op);
+      this.logger.warn(`Queued ${op.type} for "${op.personName}" on ${op.doorName} (offline)`);
+    }
+  }
+
+  async retryPendingOperations(): Promise<{ retried: number; succeeded: number; removed: number }> {
+    if (this.pendingOps.length === 0) return { retried: 0, succeeded: 0, removed: 0 };
+
+    this.logger.log(`Retrying ${this.pendingOps.length} pending device operations...`);
+    const remaining: PendingDeviceOp[] = [];
+    let succeeded = 0;
+    let removed = 0;
+
+    for (const op of this.pendingOps) {
+      // Check if device is now online
+      const door = await this.prisma.accessDoor.findUnique({ where: { id: op.doorId } });
+      if (!door || door.state !== 1) {
+        op.retries++;
+        if (op.retries > 20) {
+          removed++;
+          this.logger.warn(`Dropping stale ${op.type} for "${op.personName}" on ${op.doorName} (too many retries)`);
+          continue;
+        }
+        remaining.push(op);
+        continue;
+      }
+
+      // Check if person still exists and is active (for push/update)
+      const person = await this.prisma.accessPerson.findUnique({ where: { id: op.personId } });
+
+      try {
+        let ok = false;
+        if (op.type === 'block') {
+          ok = await this.fallback.deleteUserFromDevice(op.doorIp, op.uid, op.personName);
+        } else if (op.type === 'push' || op.type === 'update') {
+          if (!person || !person.isActive) {
+            removed++;
+            continue;
+          }
+          ok = await this.fallback.pushUserToDevice(op.doorIp, op.uid, op.empCode, person.name);
+        }
+
+        if (ok) {
+          succeeded++;
+          this.logger.log(`Retry ${op.type} succeeded for "${op.personName}" on ${op.doorName}`);
+        } else {
+          op.retries++;
+          if (op.retries > 20) {
+            removed++;
+          } else {
+            remaining.push(op);
+          }
+        }
+      } catch {
+        op.retries++;
+        if (op.retries > 20) {
+          removed++;
+        } else {
+          remaining.push(op);
+        }
+      }
+    }
+
+    this.pendingOps = remaining;
+    return { retried: this.pendingOps.length + succeeded + removed, succeeded, removed };
   }
 
   async remove(id: string) {
