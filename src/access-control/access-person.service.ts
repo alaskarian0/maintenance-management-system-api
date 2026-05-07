@@ -164,7 +164,8 @@ export class AccessPersonService {
   }
 
   private async removeFromAllDevices(person: { id: string; personId: number | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
-    const doors = await this.prisma.accessDoor.findMany();
+    // Only try online devices
+    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
     const uid = person.personId || 0;
     let success = 0;
     let failed = 0;
@@ -230,7 +231,7 @@ export class AccessPersonService {
   private async updateOnAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string; isActive: boolean }): Promise<{ success: number; failed: number; details: string[] }> {
     if (!person.isActive) return { success: 0, failed: 0, details: [] };
 
-    const doors = await this.prisma.accessDoor.findMany();
+    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
     const uid = person.personId || 0;
     const empCode = person.empCode || String(uid);
     let success = 0;

@@ -126,7 +126,8 @@ export class AccessFallbackService {
       this.logger.log(`Blocked user UID:${uid} (role=15) on device ${ip}`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to block user on ${ip}: ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
+      this.logger.warn(`Failed to block user on ${ip}: ${msg}`);
       return false;
     }
   }
