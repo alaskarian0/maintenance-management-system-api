@@ -316,6 +316,7 @@ model AccessPerson {
   fingerprintTemplates Json?              // Stored biometric templates: { fingers: [{ fid, valid, template_base64 }], face: null, pulledFrom, pulledAt }
   faceTemplates        Json?              // Face template data if available
   isActive         Boolean               @default(true)
+  deletedAt        DateTime?             // Soft delete timestamp
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   permissions      AccessPermission[]

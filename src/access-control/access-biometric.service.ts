@@ -36,7 +36,7 @@ export class AccessBiometricService {
     try {
       await zk.createSocket();
     } catch (err) {
-      this.logger.warn(`Cannot connect to ${deviceIp} for template pull: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Cannot connect to ${deviceIp} for template pull: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
       return { fingers: 0, face: false };
     }
 
@@ -81,7 +81,7 @@ export class AccessBiometricService {
 
       this.logger.log(`Pulled ${fingers.length} fingerprint templates for "${person.name}" from ${deviceIp}`);
     } catch (err) {
-      this.logger.warn(`Failed to pull templates from ${deviceIp}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to pull templates from ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
     }
 
     try {
@@ -124,7 +124,7 @@ export class AccessBiometricService {
     try {
       await zk.createSocket();
     } catch (err) {
-      this.logger.warn(`Cannot connect to ${deviceIp} for template restore: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Cannot connect to ${deviceIp} for template restore: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
       return { fingers: 0, face: false };
     }
 
@@ -132,18 +132,51 @@ export class AccessBiometricService {
     let restoredFace = false;
 
     const userId = String(person.empCode || person.personId || '');
+    const uid = person.personId || 0;
 
-    // Upload fingerprint templates
+    // Load existing users from device to populate internal cache
+    let deviceUsers: any[] = [];
+    try {
+      const usersResult = await zk.getUsers();
+      deviceUsers = Array.isArray(usersResult) ? usersResult : (usersResult?.data || []);
+      this.logger.log(`Loaded user cache from ${deviceIp}`);
+    } catch (err) {
+      this.logger.warn(`Failed to load users from ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+    }
+
+    // The device may store the user with a different userId than our empCode
+    // (e.g., if originally synced without empCode, userId would be the numeric uid).
+    // Resolve the actual userId from the device by matching on uid.
+    const matchingDeviceUser = deviceUsers.find(
+      (u: any) => String(u.userId || u.user_id || '') === userId || u.uid === uid
+    );
+
+    let deviceUserId = userId;
+    if (matchingDeviceUser) {
+      deviceUserId = String((matchingDeviceUser as any).userId || (matchingDeviceUser as any).user_id || userId);
+      this.logger.log(`Found user on device ${deviceIp}: uid=${(matchingDeviceUser as any).uid}, userId=${deviceUserId}`);
+    }
+
+    // Ensure user exists on device using zklib-ts setUser with the correct userId
+    try {
+      await zk.setUser(deviceUserId, person.name.substring(0, 24), '', 0, 0);
+      this.logger.log(`Ensured user "${person.name}" (${deviceUserId}) exists on ${deviceIp}`);
+    } catch (err) {
+      this.logger.warn(`setUser failed for "${person.name}" on ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+      // Refresh cache so uploadFingerTemplate can find the user
+      try { await zk.getUsers(); } catch { /* ignore */ }
+    }
+
+    // Upload fingerprint templates using the device's actual userId
     if (stored.fingers?.length) {
       for (const finger of stored.fingers) {
         try {
           const templateBuffer = Buffer.from(finger.template_base64, 'base64');
           const templateBase64 = templateBuffer.toString('base64');
-
-          await zk.uploadFingerTemplate(userId, templateBase64, finger.fid, finger.valid);
+          await zk.uploadFingerTemplate(deviceUserId, templateBase64, finger.fid, finger.valid);
           restoredFingers++;
         } catch (err) {
-          this.logger.warn(`Failed to upload finger ${finger.fid} to ${deviceIp}: ${err instanceof Error ? err.message : err}`);
+          this.logger.warn(`Failed to upload finger ${finger.fid} to ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
         }
       }
     }
@@ -178,6 +211,7 @@ export class AccessBiometricService {
       where: { id: personId },
       select: { fingerprintTemplates: true },
     });
-    return (person?.fingerprintTemplates as unknown as StoredTemplates) || null;
+    if (!person) return null;
+    return (person.fingerprintTemplates as unknown as StoredTemplates) ?? null;
   }
 }

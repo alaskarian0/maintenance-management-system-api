@@ -104,7 +104,7 @@ export class AccessFallbackService {
     }
   }
 
-  async deleteUserFromDevice(ip: string, uid: number, name?: string): Promise<boolean> {
+  async deleteUserFromDevice(ip: string, uid: number, name?: string, empCode?: string): Promise<boolean> {
     try {
       const ZKAttendanceClient = require('zk-attendance-sdk');
       const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
@@ -121,9 +121,32 @@ export class AccessFallbackService {
         this.logger.warn(`deleteUser not supported, blocking UID:${uid} via role=15`);
       }
 
-      await client.setUser(uid, String(uid), 'BLOCKED', '', 15, 0);
+      const userId = empCode || String(uid);
+      await client.setUser(uid, userId, 'BLOCKED', '', 15, 0);
+
+      // Delete fingerprint templates from device so blocked user can't authenticate
+      try {
+        const Zklib = require('zklib-ts/dist/index.cjs.js');
+        const zk = new Zklib(ip, 4370, 5000, 10000);
+        await zk.createSocket();
+        await zk.getUsers();
+        let deletedCount = 0;
+        for (let fid = 0; fid < 10; fid++) {
+          try {
+            await zk.deleteFinger(userId, fid);
+            deletedCount++;
+          } catch {
+            // No template at this index
+          }
+        }
+        await zk.disconnect();
+        this.logger.log(`Deleted ${deletedCount}/10 fingerprint slots for user ${userId} (UID:${uid}) on device ${ip}`);
+      } catch (err) {
+        this.logger.warn(`Failed to delete templates for UID:${uid} on ${ip}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+      }
+
       await client.disconnect();
-      this.logger.log(`Blocked user UID:${uid} (role=15) on device ${ip}`);
+      this.logger.log(`Blocked user UID:${uid} (${userId}) (role=15) on device ${ip}`);
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
@@ -248,17 +271,31 @@ export class AccessFallbackService {
     }
   }
 
-  async uploadFingerprintTemplate(ip: string, userId: string, templateBase64: string, fid: number, valid: number): Promise<boolean> {
+  async uploadFingerprintTemplate(ip: string, userId: string, name: string, templateBase64: string, fid: number, valid: number): Promise<boolean> {
     try {
       const Zklib = require('zklib-ts/dist/index.cjs.js');
       const zk = new Zklib(ip, 4370, 5000, 10000);
       await zk.createSocket();
+
+      // Load user cache from device
+      try {
+        await zk.getUsers();
+      } catch { /* ignore */ }
+
+      // Ensure user exists on device before uploading template
+      try {
+        await zk.setUser(userId, name.substring(0, 24), '', 0, 0);
+      } catch {
+        // User may already exist — refresh cache and continue
+        try { await zk.getUsers(); } catch { /* ignore */ }
+      }
+
       await zk.uploadFingerTemplate(userId, templateBase64, fid, valid);
       await zk.disconnect();
       this.logger.log(`Uploaded fingerprint template fid=${fid} for user ${userId} to ${ip}`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to upload template to ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to upload template to ${ip}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
       return false;
     }
   }

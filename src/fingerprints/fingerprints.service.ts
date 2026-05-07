@@ -176,6 +176,14 @@ export class FingerprintsService {
       return this.residentsCache ?? [];
     }
 
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      console.warn(
+        `[FingerprintsService] Residents API returned non-JSON response (${contentType}) – returning cached or empty list`,
+      );
+      return this.residentsCache ?? [];
+    }
+
     const json = (await res.json()) as FamiliesResponse;
 
     const residents: ResidentEntry[] = [];

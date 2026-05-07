@@ -80,6 +80,14 @@ export class AccessPersonController {
     };
   }
 
+  @Post(':id/push-to-device/:doorId')
+  async pushToDevice(
+    @Param('id') personId: string,
+    @Param('doorId') doorId: string,
+  ) {
+    return this.personService.pushPersonToDevice(personId, doorId);
+  }
+
   @Post()
   create(@Body() dto: CreatePersonDto) {
     return this.personService.create(dto);
