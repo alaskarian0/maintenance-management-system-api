@@ -16,6 +16,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { MaintenanceRequestsModule } from './maintenance-requests/maintenance-requests.module';
 import { SparePartsModule } from './spare-parts/spare-parts.module';
 import { SearchModule } from './search/search.module';
+import { AccessControlModule } from './access-control/access-control.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { SearchModule } from './search/search.module';
     FingerprintsModule,
     ReportsModule,
     SearchModule,
+    AccessControlModule,
   ],
 })
 export class AppModule {}

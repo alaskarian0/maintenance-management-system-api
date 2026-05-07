@@ -281,3 +281,64 @@ model SparePartUsage {
   @@index([maintenanceId])
   @@index([sparePartId])
 }
+
+model AccessDoor {
+  id           String   @id @default(cuid())
+  zkTerminalId Int?
+  name         String
+  location     String?
+  serialNumber String?
+  ipAddress    String?
+  state        Int      @default(3)
+  lastActivity DateTime?
+  isAttendance Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  permissions  AccessPermission[]
+  logs         AccessLog[]
+}
+
+model AccessPerson {
+  id         String                @id @default(cuid())
+  personType FingerprintPersonType @default(EMPLOYEE)
+  name       String
+  personId   Int?
+  empCode    String?
+  region     String?
+  note       String?
+  phone      String?
+  isActive   Boolean               @default(true)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  permissions AccessPermission[]
+  logs        AccessLog[]
+}
+
+model AccessPermission {
+  id        String       @id @default(cuid())
+  person    AccessPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  personId  String
+  door      AccessDoor   @relation(fields: [doorId], references: [id], onDelete: Cascade)
+  doorId    String
+  grantedBy String?
+  grantedAt DateTime     @default(now())
+
+  @@unique([personId, doorId])
+}
+
+model AccessLog {
+  id              String        @id @default(cuid())
+  person          AccessPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
+  personId        String?
+  door            AccessDoor    @relation(fields: [doorId], references: [id], onDelete: Cascade)
+  doorId          String
+  punchTime       DateTime
+  punchState      Int           @default(0)
+  verifyType      Int?
+  status          String        @default("authorized")
+  syncedFromZKBio Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+
+  @@index([doorId, punchTime(sort: Desc)])
+  @@index([personId, punchTime(sort: Desc)])
+}

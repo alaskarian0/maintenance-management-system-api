@@ -17,7 +17,8 @@ export class MaintenanceController {
   constructor(private readonly maintenanceService: MaintenanceService) {}
 
   private actor(h?: string) {
-    return (h && h.trim()) || 'غير معروف';
+    if (!h || !h.trim()) return 'غير معروف';
+    try { return decodeURIComponent(h.trim()); } catch { return h.trim(); }
   }
 
   @Get()
