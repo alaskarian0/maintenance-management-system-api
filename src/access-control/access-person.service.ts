@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService, DeviceUserInfo } from './access-fallback.service';
+import { QueryPersonDto } from './dto/query-person.dto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -69,18 +71,48 @@ export class AccessPersonService {
     private fallback: AccessFallbackService,
   ) {}
 
-  async findAll(personType?: string, isActive?: boolean) {
-    const where: Record<string, unknown> = {};
-    if (personType) where.personType = personType;
-    if (isActive !== undefined) where.isActive = isActive;
+  async findAll(query: QueryPersonDto) {
+    const {
+      search,
+      personType,
+      isActive,
+      page = '1',
+      limit = '20',
+    } = query;
+    const skip = (Number(page) - 1) * Number(limit);
 
-    return this.prisma.accessPerson.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { permissions: true } },
-      },
-    });
+    const where: Prisma.AccessPersonWhereInput = {};
+
+    if (personType) {
+      where.personType = personType;
+    }
+    if (isActive === 'true') {
+      where.isActive = true;
+    } else if (isActive === 'false') {
+      where.isActive = false;
+    }
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { empCode: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.accessPerson.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          _count: { select: { permissions: true } },
+        },
+        skip,
+        take: Number(limit),
+      }),
+      this.prisma.accessPerson.count({ where }),
+    ]);
+
+    return { data, total, page: Number(page), limit: Number(limit) };
   }
 
   async findOne(id: string) {
@@ -108,7 +140,121 @@ export class AccessPersonService {
     id: string,
     data: { name?: string; region?: string; note?: string; phone?: string; isActive?: boolean },
   ) {
-    return this.prisma.accessPerson.update({ where: { id }, data });
+    const person = await this.prisma.accessPerson.findUnique({ where: { id } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const wasActive = person.isActive;
+    const willBeActive = data.isActive ?? wasActive;
+
+    const updated = await this.prisma.accessPerson.update({ where: { id }, data });
+
+    let deviceSync: { success: number; failed: number; details: string[] } = { success: 0, failed: 0, details: [] };
+
+    // If active status changed, sync with physical devices
+    if (wasActive && !willBeActive) {
+      deviceSync = await this.removeFromAllDevices(person);
+    } else if (!wasActive && willBeActive) {
+      deviceSync = await this.pushToPermittedDevices(updated);
+    } else if (willBeActive && (data.name)) {
+      // Name changed while active — update on devices
+      deviceSync = await this.updateOnAllDevices(updated);
+    }
+
+    return { ...updated, _deviceSync: deviceSync };
+  }
+
+  private async removeFromAllDevices(person: { id: string; personId: number | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
+    const doors = await this.prisma.accessDoor.findMany();
+    const uid = person.personId || 0;
+    let success = 0;
+    let failed = 0;
+    const details: string[] = [];
+
+    for (const door of doors) {
+      if (!door.ipAddress) continue;
+      try {
+        const removed = await this.fallback.deleteUserFromDevice(door.ipAddress, uid, person.name);
+        if (removed) {
+          success++;
+          this.logger.log(`Blocked "${person.name}" on device ${door.name} (${door.ipAddress})`);
+        } else {
+          failed++;
+          details.push(`فشل الحظر على ${door.name}`);
+        }
+      } catch (err) {
+        failed++;
+        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return { success, failed, details };
+  }
+
+  private async pushToPermittedDevices(person: { id: string; personId: number | null; empCode: string | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
+    const permissions = await this.prisma.accessPermission.findMany({
+      where: { personId: person.id },
+      include: { door: true },
+    });
+
+    const empCode = person.empCode || `P${person.personId || Date.now()}`;
+    const uid = person.personId || Math.abs(person.id.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0));
+
+    const doorsToPush = permissions.length > 0
+      ? permissions.map((p) => p.door).filter((d) => d?.ipAddress)
+      : await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+
+    let success = 0;
+    let failed = 0;
+    const details: string[] = [];
+
+    for (const door of doorsToPush) {
+      if (!door?.ipAddress) continue;
+      try {
+        const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
+        if (pushed) {
+          success++;
+          this.logger.log(`Pushed "${person.name}" to device ${door.name} (${door.ipAddress})`);
+        } else {
+          failed++;
+          details.push(`فشل الإرسال إلى ${door.name}`);
+        }
+      } catch (err) {
+        failed++;
+        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return { success, failed, details };
+  }
+
+  private async updateOnAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string; isActive: boolean }): Promise<{ success: number; failed: number; details: string[] }> {
+    if (!person.isActive) return { success: 0, failed: 0, details: [] };
+
+    const doors = await this.prisma.accessDoor.findMany();
+    const uid = person.personId || 0;
+    const empCode = person.empCode || String(uid);
+    let success = 0;
+    let failed = 0;
+    const details: string[] = [];
+
+    for (const door of doors) {
+      if (!door.ipAddress) continue;
+      try {
+        const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
+        if (pushed) {
+          success++;
+          this.logger.log(`Updated "${person.name}" on device ${door.name} (${door.ipAddress})`);
+        } else {
+          failed++;
+          details.push(`فشل التحديث على ${door.name}`);
+        }
+      } catch (err) {
+        failed++;
+        details.push(`خطأ على ${door.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return { success, failed, details };
   }
 
   async remove(id: string) {

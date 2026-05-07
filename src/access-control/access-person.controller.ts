@@ -11,19 +11,15 @@ import {
 import { AccessPersonService } from './access-person.service';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { UpdatePersonDto } from './dto/update-person.dto';
+import { QueryPersonDto } from './dto/query-person.dto';
 
 @Controller('access-control/persons')
 export class AccessPersonController {
   constructor(private readonly personService: AccessPersonService) {}
 
   @Get()
-  findAll(
-    @Query('personType') personType?: string,
-    @Query('isActive') isActive?: string,
-  ) {
-    const active =
-      isActive === 'true' ? true : isActive === 'false' ? false : undefined;
-    return this.personService.findAll(personType, active);
+  findAll(@Query() query: QueryPersonDto) {
+    return this.personService.findAll(query);
   }
 
   @Get('search/employees')

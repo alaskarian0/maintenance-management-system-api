@@ -86,11 +86,12 @@ export class AccessLogService {
       }
 
       // Try to find matching person by deviceUserId (personId) or empCode
+      const deviceUserIdNum = parseInt(String(log.deviceUserId), 10);
       const person = log.deviceUserId
         ? await this.prisma.accessPerson.findFirst({
             where: {
               OR: [
-                { personId: log.deviceUserId },
+                ...(isNaN(deviceUserIdNum) ? [] : [{ personId: deviceUserIdNum }]),
                 { empCode: String(log.deviceUserId) },
               ],
             },

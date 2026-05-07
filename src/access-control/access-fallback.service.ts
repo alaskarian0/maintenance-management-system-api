@@ -15,7 +15,7 @@ export interface DeviceUserInfo {
 }
 
 export interface DeviceAttendanceRecord {
-  deviceUserId: number;
+  deviceUserId: number | string;
   deviceSerialNumber: string | null;
   timestamp: Date;
   state: number;
@@ -104,17 +104,29 @@ export class AccessFallbackService {
     }
   }
 
-  async deleteUserFromDevice(ip: string, uid: number): Promise<boolean> {
+  async deleteUserFromDevice(ip: string, uid: number, name?: string): Promise<boolean> {
     try {
       const ZKAttendanceClient = require('zk-attendance-sdk');
       const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
       await client.createSocket();
-      await client.deleteUser(uid);
+
+      // Try deleteUser first
+      try {
+        await client.deleteUser(uid);
+        await client.disconnect();
+        this.logger.log(`Deleted user UID:${uid} from device ${ip} via ZK SDK`);
+        return true;
+      } catch {
+        // deleteUser not supported over TCP, fall back to blocking (role=15)
+        this.logger.warn(`deleteUser not supported, blocking UID:${uid} via role=15`);
+      }
+
+      await client.setUser(uid, String(uid), 'BLOCKED', '', 15, 0);
       await client.disconnect();
-      this.logger.log(`Deleted user UID:${uid} from device ${ip} via ZK SDK`);
+      this.logger.log(`Blocked user UID:${uid} (role=15) on device ${ip}`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to delete user from ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to block user on ${ip}: ${err instanceof Error ? err.message : err}`);
       return false;
     }
   }
@@ -155,9 +167,9 @@ export class AccessFallbackService {
 
       const logs = result?.data || [];
       return logs.map((log: any) => ({
-        deviceUserId: log.deviceUserId || log.uid || 0,
+        deviceUserId: log.deviceUserId || log.userSn || 0,
         deviceSerialNumber: null,
-        timestamp: log.attTime ? new Date(log.attTime) : new Date(),
+        timestamp: log.recordTime ? new Date(log.recordTime) : (log.attTime ? new Date(log.attTime) : new Date()),
         state: log.state || 0,
         verifyType: log.verifyMethod ?? log.verifyType ?? 0,
       }));
