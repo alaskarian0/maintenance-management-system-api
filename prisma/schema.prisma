@@ -299,19 +299,24 @@ model AccessDoor {
 }
 
 model AccessPerson {
-  id         String                @id @default(cuid())
-  personType FingerprintPersonType @default(EMPLOYEE)
-  name       String
-  personId   Int?
-  empCode    String?
-  region     String?
-  note       String?
-  phone      String?
-  isActive   Boolean               @default(true)
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
-  permissions AccessPermission[]
-  logs        AccessLog[]
+  id               String                @id @default(cuid())
+  personType       FingerprintPersonType @default(EMPLOYEE)
+  name             String
+  personId         Int?
+  empCode          String?
+  zkEmployeeId     Int?
+  region           String?
+  note             String?
+  phone            String?
+  fingerprintStatus String                @default("none")
+  faceStatus       String                @default("none")
+  enrollDevice     String?
+  lastSyncAt       DateTime?
+  isActive         Boolean               @default(true)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  permissions      AccessPermission[]
+  logs             AccessLog[]
 }
 
 model AccessPermission {

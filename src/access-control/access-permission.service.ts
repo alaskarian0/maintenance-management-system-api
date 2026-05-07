@@ -1,12 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { ZKBioClient, ZKBioPaginated } from './zkbio.client';
+import { AccessFallbackService } from './access-fallback.service';
 
-interface ZKBioEmployee {
-  id: number;
-  emp_code: string;
-  emp_name: string;
-  area: { id: number; area_name: string }[];
+export interface SyncResult {
+  synced: boolean;
+  message: string;
 }
 
 @Injectable()
@@ -15,7 +13,7 @@ export class AccessPermissionService {
 
   constructor(
     private prisma: PrismaService,
-    private zkBio: ZKBioClient,
+    private fallback: AccessFallbackService,
   ) {}
 
   async findAll() {
@@ -32,7 +30,7 @@ export class AccessPermissionService {
       update: { grantedBy },
     });
 
-    const sync = await this.pushUserToZKBioTime(personId, doorId);
+    const sync = await this.syncGrant(personId, doorId);
 
     return {
       ...result,
@@ -51,7 +49,7 @@ export class AccessPermissionService {
       results.push(perm);
     }
 
-    const sync = await this.pushUserToZKBioTime(personId);
+    const sync = await this.syncGrant(personId);
 
     return {
       permissions: results,
@@ -69,7 +67,7 @@ export class AccessPermissionService {
 
     let sync: SyncResult = { synced: false, message: 'No person found' };
     if (perm) {
-      sync = await this.removeUserFromZKBioTime(perm.person, perm.door);
+      sync = await this.syncRevoke(perm.person, perm.door);
     }
 
     return {
@@ -90,7 +88,7 @@ export class AccessPermissionService {
 
     let sync: SyncResult = { synced: false, message: 'No person found' };
     if (perm) {
-      sync = await this.removeUserFromZKBioTime(perm.person, perm.door);
+      sync = await this.syncRevoke(perm.person, perm.door);
     }
 
     return {
@@ -99,95 +97,94 @@ export class AccessPermissionService {
     };
   }
 
-  private async pushUserToZKBioTime(personId: string, doorId?: string): Promise<SyncResult> {
-    try {
-      const person = await this.prisma.accessPerson.findUnique({
-        where: { id: personId },
-      });
-      if (!person || !person.isActive) {
-        return { synced: false, message: 'Person not found or inactive' };
+  private async syncGrant(personId: string, doorId?: string): Promise<SyncResult> {
+    const person = await this.prisma.accessPerson.findUnique({
+      where: { id: personId },
+    });
+    if (!person || !person.isActive) {
+      return { synced: false, message: 'Person not found or inactive' };
+    }
+
+    const empCode = person.empCode || `P${person.personId || Date.now()}`;
+
+    const doors = doorId
+      ? [await this.prisma.accessDoor.findUnique({ where: { id: doorId } })]
+      : await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const door of doors) {
+      if (!door?.ipAddress) continue;
+
+      const uid = person.personId || Math.abs(person.id.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0));
+      const pushed = await this.fallback.pushUserToDevice(
+        door.ipAddress,
+        uid,
+        empCode,
+        person.name,
+      );
+      if (pushed) {
+        successCount++;
+      } else {
+        failCount++;
       }
+    }
 
-      const empCode = person.empCode || `P${person.personId || Date.now()}`;
-
-      const existing = await this.zkBio.get<ZKBioPaginated<ZKBioEmployee>>(
-        '/personnel/api/employees/',
-        { emp_code: empCode },
-      );
-
-      if (existing.data && existing.data.length > 0) {
-        this.logger.log(`Employee "${person.name}" (${empCode}) already exists in ZKBio Time`);
-        return { synced: true, message: 'Employee already synced to ZKBio Time server' };
-      }
-
-      const newEmployee = await this.zkBio.post<ZKBioEmployee>(
-        '/personnel/api/employees/',
-        {
-          emp_code: empCode,
-          emp_name: person.name,
-          department: 1,
-          area: [1],
-        },
-      );
-
-      this.logger.log(
-        `Created employee "${person.name}" (${empCode}) in ZKBio Time (ID: ${newEmployee.id})`,
-      );
-
+    if (successCount > 0) {
       if (!person.empCode) {
         await this.prisma.accessPerson.update({
           where: { id: personId },
-          data: { empCode: empCode },
+          data: { empCode },
         });
       }
-
-      return { synced: true, message: `Employee "${person.name}" pushed to ZKBio Time server successfully` };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Failed to push user to ZKBio Time: ${msg}`);
-      return { synced: false, message: `ZKBio Time server error: ${msg}` };
+      return { synced: true, message: `Employee "${person.name}" pushed to ${successCount} device(s)${failCount > 0 ? ` (${failCount} failed)` : ''}` };
     }
+
+    return {
+      synced: false,
+      message: `Failed to push "${person.name}" to any device. ${failCount} device(s) unreachable.`,
+    };
   }
 
-  private async removeUserFromZKBioTime(
+  private async syncRevoke(
     person: { id: string; name: string; empCode: string | null; personId: number | null } | null,
-    door: { id: string; name: string; zkTerminalId: number | null } | null,
+    door: { id: string; name: string; ipAddress?: string | null } | null,
   ): Promise<SyncResult> {
     if (!person) {
       return { synced: false, message: 'No person provided' };
     }
 
-    try {
-      const empCode = person.empCode || `P${person.personId}`;
+    const uid = person.personId || 0;
 
-      const existing = await this.zkBio.get<ZKBioPaginated<ZKBioEmployee>>(
-        '/personnel/api/employees/',
-        { emp_code: empCode },
-      );
-
-      if (!existing.data || existing.data.length === 0) {
-        this.logger.log(`Employee "${person.name}" not found in ZKBio Time, nothing to remove`);
-        return { synced: true, message: 'Employee was not in ZKBio Time server' };
+    if (door?.ipAddress) {
+      const removed = await this.fallback.deleteUserFromDevice(door.ipAddress, uid);
+      if (removed) {
+        return { synced: true, message: `Employee removed from device "${door.name}" via ZK SDK` };
       }
-
-      const zkEmpId = existing.data[0].id;
-
-      await this.zkBio.del(`/personnel/api/employees/${zkEmpId}/`);
-
-      this.logger.log(
-        `Removed employee "${person.name}" (${empCode}) from ZKBio Time`,
-      );
-
-      return { synced: true, message: `Employee "${person.name}" removed from ZKBio Time server` };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Failed to remove user from ZKBio Time: ${msg}`);
-      return { synced: false, message: `ZKBio Time server error: ${msg}` };
     }
-  }
-}
 
-export interface SyncResult {
-  synced: boolean;
-  message: string;
+    // If no specific door or the specific door failed, try all active doors the person has access to
+    const permissions = await this.prisma.accessPermission.findMany({
+      where: { personId: person.id },
+      include: { door: true },
+    });
+
+    let removed = false;
+    for (const perm of permissions) {
+      if (perm.door?.ipAddress) {
+        const success = await this.fallback.deleteUserFromDevice(perm.door.ipAddress, uid);
+        if (success) removed = true;
+      }
+    }
+
+    if (removed) {
+      return { synced: true, message: `Employee removed from device(s) via ZK SDK` };
+    }
+
+    return {
+      synced: false,
+      message: `Could not remove "${person.name}" from any device.`,
+    };
+  }
 }

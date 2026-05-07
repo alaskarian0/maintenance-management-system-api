@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma.module';
-import { ZKBioClient } from './zkbio.client';
+import { AccessFallbackService } from './access-fallback.service';
 import { AccessDoorController } from './access-door.controller';
 import { AccessDoorService } from './access-door.service';
 import { AccessPersonController } from './access-person.controller';
@@ -9,6 +9,7 @@ import { AccessPermissionController } from './access-permission.controller';
 import { AccessPermissionService } from './access-permission.service';
 import { AccessLogController } from './access-log.controller';
 import { AccessLogService } from './access-log.service';
+import { AccessSyncScheduler } from './access-sync.scheduler';
 
 @Module({
   imports: [PrismaModule],
@@ -19,11 +20,12 @@ import { AccessLogService } from './access-log.service';
     AccessLogController,
   ],
   providers: [
-    ZKBioClient,
+    AccessFallbackService,
     AccessDoorService,
     AccessPersonService,
     AccessPermissionService,
     AccessLogService,
+    AccessSyncScheduler,
   ],
   exports: [AccessLogService],
 })

@@ -8,7 +8,7 @@ import {
   Body,
 } from '@nestjs/common';
 import { AccessDoorService } from './access-door.service';
-import { ZKBioClient } from './zkbio.client';
+import { AccessSyncScheduler } from './access-sync.scheduler';
 import { CreateDoorDto } from './dto/create-door.dto';
 import { UpdateDoorDto } from './dto/update-door.dto';
 
@@ -16,12 +16,12 @@ import { UpdateDoorDto } from './dto/update-door.dto';
 export class AccessDoorController {
   constructor(
     private readonly doorService: AccessDoorService,
-    private readonly zkBio: ZKBioClient,
+    private readonly syncScheduler: AccessSyncScheduler,
   ) {}
 
-  @Get('server-status')
-  checkServerStatus() {
-    return this.zkBio.healthCheck();
+  @Get('system-status')
+  systemStatus() {
+    return this.syncScheduler.status;
   }
 
   @Get()
@@ -40,8 +40,13 @@ export class AccessDoorController {
   }
 
   @Post('sync')
-  syncFromZKBio() {
-    return this.doorService.syncFromZKBio();
+  async syncDevices() {
+    return this.doorService.pingAllDoors();
+  }
+
+  @Post('discover/:id')
+  discoverInfo(@Param('id') id: string) {
+    return this.doorService.discoverDeviceInfo(id);
   }
 
   @Patch(':id')
@@ -57,5 +62,15 @@ export class AccessDoorController {
   @Get(':id/persons')
   getDoorPersons(@Param('id') id: string) {
     return this.doorService.getDoorPersons(id);
+  }
+
+  @Post('ping')
+  pingAll() {
+    return this.doorService.pingAllDoors();
+  }
+
+  @Post(':id/ping')
+  pingDoor(@Param('id') id: string) {
+    return this.doorService.pingDoor(id);
   }
 }

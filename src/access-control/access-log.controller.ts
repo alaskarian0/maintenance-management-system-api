@@ -32,8 +32,8 @@ export class AccessLogController {
   }
 
   @Post('sync')
-  syncFromZKBio() {
-    return this.logService.syncFromZKBio();
+  syncFromDevices() {
+    return this.logService.syncAllDevices();
   }
 
   @Get('stats')

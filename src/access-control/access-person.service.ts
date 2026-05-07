@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
+import { AccessFallbackService, DeviceUserInfo } from './access-fallback.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -58,11 +59,15 @@ interface FamiliesResponse {
 
 @Injectable()
 export class AccessPersonService {
+  private readonly logger = new Logger(AccessPersonService.name);
   private residentsCache: ResidentEntry[] | null = null;
   private residentsCacheAt = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fallback: AccessFallbackService,
+  ) {}
 
   async findAll(personType?: string, isActive?: boolean) {
     const where: Record<string, unknown> = {};
@@ -115,6 +120,134 @@ export class AccessPersonService {
       where: { personId },
       include: { door: true },
     });
+  }
+
+  async syncBiometricStatus(): Promise<{ updated: number; details: string[] }> {
+    const details: string[] = [];
+    let updated = 0;
+
+    try {
+      const persons = await this.prisma.accessPerson.findMany({
+        where: { empCode: { not: null }, isActive: true },
+      });
+
+      if (persons.length === 0) {
+        details.push('لا يوجد أشخاص برقم موظف للمزامنة');
+        return { updated: 0, details };
+      }
+
+      const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+
+      for (const person of persons) {
+        let found = false;
+
+        for (const door of doors) {
+          if (!door.ipAddress) continue;
+
+          try {
+            const users = await this.fallback.getDeviceUsers(door.ipAddress);
+            const match = users.find(
+              (u) => u.userId === person.empCode || u.uid === person.personId,
+            );
+
+            if (match) {
+              await this.prisma.accessPerson.update({
+                where: { id: person.id },
+                data: {
+                  personId: match.uid,
+                  fingerprintStatus: 'enrolled',
+                  lastSyncAt: new Date(),
+                },
+              });
+              details.push(`${person.name}: مسجّل على ${door.name} (UID: ${match.uid})`);
+              found = true;
+              break;
+            }
+          } catch {
+            // Skip this device
+          }
+        }
+
+        if (!found) {
+          await this.prisma.accessPerson.update({
+            where: { id: person.id },
+            data: {
+              fingerprintStatus: 'not_pushed',
+              lastSyncAt: new Date(),
+            },
+          });
+          details.push(`${person.name}: غير موجود على أي جهاز`);
+        }
+        updated++;
+      }
+    } catch (err) {
+      this.logger.warn(`Biometric sync failed: ${err instanceof Error ? err.message : err}`);
+      details.push('فشلت مزامنة الجهاز');
+    }
+
+    return { updated, details };
+  }
+
+  async syncFromDevice(doorId: string): Promise<{ synced: number; created: number; updated: number; details: string[] }> {
+    const details: string[] = [];
+    let created = 0;
+    let updated = 0;
+
+    const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
+    if (!door) {
+      throw new NotFoundException(`Door ${doorId} not found`);
+    }
+    if (!door.ipAddress) {
+      throw new NotFoundException(`Door "${door.name}" has no IP address configured`);
+    }
+
+    const deviceUsers: DeviceUserInfo[] = await this.fallback.getDeviceUsers(door.ipAddress);
+    if (deviceUsers.length === 0) {
+      details.push(`لا يوجد مستخدمين على الجهاز ${door.ipAddress}`);
+      return { synced: 0, created: 0, updated: 0, details };
+    }
+
+    details.push(`تم العثور على ${deviceUsers.length} مستخدم على جهاز ${door.name} (${door.ipAddress})`);
+
+    for (const deviceUser of deviceUsers) {
+      const existingPerson = await this.prisma.accessPerson.findFirst({
+        where: {
+          OR: [
+            { personId: deviceUser.uid },
+            { name: deviceUser.name },
+          ],
+        },
+      });
+
+      if (!existingPerson) {
+        await this.prisma.accessPerson.create({
+          data: {
+            personType: 'EMPLOYEE',
+            name: deviceUser.name || `User ${deviceUser.uid}`,
+            personId: deviceUser.uid,
+            empCode: deviceUser.userId || String(deviceUser.uid),
+            fingerprintStatus: 'enrolled',
+            lastSyncAt: new Date(),
+          },
+        });
+        details.push(`جديد: ${deviceUser.name} (UID: ${deviceUser.uid})`);
+        created++;
+      } else {
+        const nameChanged = deviceUser.name && deviceUser.name !== existingPerson.name;
+        await this.prisma.accessPerson.update({
+          where: { id: existingPerson.id },
+          data: {
+            ...(nameChanged ? { name: deviceUser.name } : {}),
+            fingerprintStatus: 'enrolled',
+            lastSyncAt: new Date(),
+          },
+        });
+        details.push(`محدّث: ${deviceUser.name || existingPerson.name} (UID: ${deviceUser.uid})${nameChanged ? ' — تم تغيير الاسم' : ''}`);
+        updated++;
+      }
+    }
+
+    return { synced: deviceUsers.length, created, updated, details };
   }
 
   searchEmployees(query: string): EmployeeEntry[] {

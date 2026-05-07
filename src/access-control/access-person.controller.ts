@@ -36,6 +36,16 @@ export class AccessPersonController {
     return this.personService.searchResidents(query);
   }
 
+  @Post('sync-biometric')
+  syncBiometricStatus() {
+    return this.personService.syncBiometricStatus();
+  }
+
+  @Post('sync-from-device/:doorId')
+  syncFromDevice(@Param('doorId') doorId: string) {
+    return this.personService.syncFromDevice(doorId);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.personService.findOne(id);
