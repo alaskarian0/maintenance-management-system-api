@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService } from './access-fallback.service';
 
@@ -8,6 +8,27 @@ export class AccessDoorService {
     private prisma: PrismaService,
     private fallback: AccessFallbackService,
   ) {}
+
+  private async getDoorIp(id: string): Promise<string> {
+    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
+    if (!door) throw new NotFoundException('Door not found');
+    if (!door.ipAddress) throw new NotFoundException('Door has no IP address configured');
+    return door.ipAddress;
+  }
+
+  private async getDoorRecord(id: string): Promise< { ipAddress: string; serialNumber: string | null; id: string; [key: string]: any } > {
+    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
+    if (!door) throw new NotFoundException('Door not found');
+    if (!door.ipAddress) throw new NotFoundException('Door has no IP address configured');
+    return door as typeof door & { ipAddress: string };
+  }
+
+  private async execAction(id: string, fn: (ip: string) => Promise<boolean>, label: string) {
+    const ip = await this.getDoorIp(id);
+    const ok = await fn(ip);
+    if (!ok) throw new Error(`Failed to ${label}`);
+    return { success: true };
+  }
 
   async findAll() {
     return this.prisma.accessDoor.findMany({
@@ -144,5 +165,77 @@ export class AccessDoorService {
     }
 
     return info;
+  }
+
+  // ── Device Control Methods ──────────────────────────────────────────
+
+  async getFullDeviceInfo(id: string) {
+    const door = await this.getDoorRecord(id);
+    const info = await this.fallback.getFullDeviceInfo(door.ipAddress);
+    if (!info) return null;
+    if (info.serialNumber && !door.serialNumber) {
+      await this.prisma.accessDoor.update({
+        where: { id },
+        data: { serialNumber: info.serialNumber },
+      });
+    }
+    return info;
+  }
+
+  async getDeviceTime(id: string) {
+    const ip = await this.getDoorIp(id);
+    return this.fallback.getDeviceTime(ip);
+  }
+
+  async setDeviceTime(id: string) {
+    return this.execAction(id, (ip) => this.fallback.setDeviceTime(ip), 'set device time');
+  }
+
+  async getDoorState(id: string) {
+    const ip = await this.getDoorIp(id);
+    const state = await this.fallback.getDoorState(ip);
+    return state ?? { state: -1, label: 'unknown' };
+  }
+
+  async unlockDoor(id: string) {
+    return this.execAction(id, (ip) => this.fallback.unlockDoor(ip), 'unlock door');
+  }
+
+  async restartDevice(id: string) {
+    const result = await this.execAction(id, (ip) => this.fallback.restartDevice(ip), 'restart device');
+    await this.prisma.accessDoor.update({ where: { id }, data: { state: 3 } }).catch(() => {});
+    return result;
+  }
+
+  async freezeDevice(id: string) {
+    return this.execAction(id, (ip) => this.fallback.freezeDevice(ip), 'freeze device');
+  }
+
+  async unfreezeDevice(id: string) {
+    return this.execAction(id, (ip) => this.fallback.unfreezeDevice(ip), 'unfreeze device');
+  }
+
+  async testVoice(id: string) {
+    return this.execAction(id, (ip) => this.fallback.testVoice(ip), 'test voice');
+  }
+
+  async cancelAlarm(id: string) {
+    return this.execAction(id, (ip) => this.fallback.cancelAlarm(ip), 'cancel alarm');
+  }
+
+  async powerOffDevice(id: string) {
+    const result = await this.execAction(id, (ip) => this.fallback.powerOffDevice(ip), 'power off device');
+    await this.prisma.accessDoor.update({ where: { id }, data: { state: 3 } }).catch(() => {});
+    return result;
+  }
+
+  async getDeviceOptions(id: string) {
+    const ip = await this.getDoorIp(id);
+    const options = await this.fallback.getDeviceOptions(ip);
+    return options ?? '';
+  }
+
+  async setDeviceOptions(id: string, data: string) {
+    return this.execAction(id, (ip) => this.fallback.setDeviceOptions(ip, data), 'set device options');
   }
 }

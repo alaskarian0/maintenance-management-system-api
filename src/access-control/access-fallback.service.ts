@@ -26,6 +26,12 @@ export interface DeviceAttendanceRecord {
 export class AccessFallbackService {
   private readonly logger = new Logger(AccessFallbackService.name);
 
+  private errMsg(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    try { return JSON.stringify(err); } catch { return String(err); }
+  }
+
   async pingDevice(ip: string): Promise<DevicePingResult> {
     const start = Date.now();
 
@@ -84,8 +90,21 @@ export class AccessFallbackService {
         name: u.name || '',
       }));
     } catch (err) {
-      this.logger.warn(`Failed to get users from ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to get users from ${ip}: ${this.errMsg(err)}`);
       return [];
+    }
+  }
+
+  async checkUserOnDevice(ip: string, uid: number, empCode?: string): Promise<{ exists: boolean; name?: string; role?: number }> {
+    try {
+      const users = await this.getDeviceUsers(ip);
+      const match = users.find(u => u.uid === uid || (empCode && u.userId === empCode));
+      if (match) {
+        return { exists: true, name: match.name };
+      }
+      return { exists: false };
+    } catch {
+      return { exists: false };
     }
   }
 
@@ -99,7 +118,7 @@ export class AccessFallbackService {
       this.logger.log(`Pushed user "${name}" (${userId}) to device ${ip} via ZK SDK`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to push user to ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to push user to ${ip}: ${this.errMsg(err)}`);
       return false;
     }
   }
@@ -142,15 +161,14 @@ export class AccessFallbackService {
         await zk.disconnect();
         this.logger.log(`Deleted ${deletedCount}/10 fingerprint slots for user ${userId} (UID:${uid}) on device ${ip}`);
       } catch (err) {
-        this.logger.warn(`Failed to delete templates for UID:${uid} on ${ip}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+      this.logger.warn(`Failed to delete templates for UID:${uid} on ${ip}: ${this.errMsg(err)}`);
       }
 
       await client.disconnect();
       this.logger.log(`Blocked user UID:${uid} (${userId}) (role=15) on device ${ip}`);
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
-      this.logger.warn(`Failed to block user on ${ip}: ${msg}`);
+      this.logger.warn(`Failed to block user on ${ip}: ${this.errMsg(err)}`);
       return false;
     }
   }
@@ -198,7 +216,7 @@ export class AccessFallbackService {
         verifyType: log.verifyMethod ?? log.verifyType ?? 0,
       }));
     } catch (err) {
-      this.logger.warn(`Failed to get attendance logs from ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to get attendance logs from ${ip}: ${this.errMsg(err)}`);
       return [];
     }
   }
@@ -213,7 +231,7 @@ export class AccessFallbackService {
       this.logger.log(`Cleared attendance logs on device ${ip}`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to clear attendance logs on ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to clear attendance logs on ${ip}: ${this.errMsg(err)}`);
       return false;
     }
   }
@@ -266,7 +284,7 @@ export class AccessFallbackService {
       this.logger.log(`Got ${result.length} fingerprint templates from ${ip}`);
       return result;
     } catch (err) {
-      this.logger.warn(`Failed to get templates from ${ip}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to get templates from ${ip}: ${this.errMsg(err)}`);
       return [];
     }
   }
@@ -295,7 +313,270 @@ export class AccessFallbackService {
       this.logger.log(`Uploaded fingerprint template fid=${fid} for user ${userId} to ${ip}`);
       return true;
     } catch (err) {
-      this.logger.warn(`Failed to upload template to ${ip}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+      this.logger.warn(`Failed to upload template to ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  // ── Device Control Methods ──────────────────────────────────────────
+
+  async getFullDeviceInfo(ip: string): Promise<{
+    serialNumber: string | null;
+    firmware: string | null;
+    deviceName: string | null;
+    platform: string | null;
+    os: string | null;
+    userCounts: number | null;
+    logCounts: number | null;
+    logCapacity: number | null;
+  } | null> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+
+      // ZK TCP is sequential — fetch one at a time
+      let serialNumber: string | null = null;
+      let firmware: string | null = null;
+      let deviceName: string | null = null;
+      let platform: string | null = null;
+      let os: string | null = null;
+      let info: any = null;
+
+      try { const v = await client.getSerialNumber(); serialNumber = v ? String(v).trim() : null; } catch { /* skip */ }
+      try { const v = await client.getFirmware(); firmware = v ? String(v).trim() : null; } catch { /* skip */ }
+      try { const v = await client.getDeviceName(); deviceName = v ? String(v).trim() : null; } catch { /* skip */ }
+      try { const v = await client.getPlatform(); platform = v ? String(v).trim() : null; } catch { /* skip */ }
+      try { const v = await client.getOS(); os = v ? String(v).trim() : null; } catch { /* skip */ }
+      try { info = await client.getInfo(); } catch { /* skip */ }
+
+      await client.disconnect();
+
+      let userCounts: number | null = null;
+      let logCounts: number | null = null;
+      let logCapacity: number | null = null;
+      if (info) {
+        userCounts = typeof info.userCounts === 'number' ? info.userCounts : (typeof info.userCount === 'number' ? info.userCount : null);
+        logCounts = typeof info.logCounts === 'number' ? info.logCounts : (typeof info.logCount === 'number' ? info.logCount : null);
+        logCapacity = typeof info.logCapacity === 'number' ? info.logCapacity : null;
+      }
+
+      return { serialNumber, firmware, deviceName, platform, os, userCounts, logCounts, logCapacity };
+    } catch (err) {
+      this.logger.warn(`Failed to get full device info from ${ip}: ${this.errMsg(err)}`);
+      return null;
+    }
+  }
+
+  async getDeviceTime(ip: string): Promise<string | null> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      const time = await client.getTime();
+      await client.disconnect();
+      if (!time) return null;
+      const date = time instanceof Date ? time : new Date(String(time));
+      return isNaN(date.getTime()) ? String(time) : date.toISOString();
+    } catch (err) {
+      this.logger.warn(`Failed to get device time from ${ip}: ${this.errMsg(err)}`);
+      return null;
+    }
+  }
+
+  async setDeviceTime(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_SET_TIME = 202; encode time as per ZK protocol
+      const now = new Date();
+      const encoded =
+        ((now.getFullYear() % 100) * 12 * 31 + now.getMonth() * 31 + now.getDate() - 1) * (24 * 60 * 60) +
+        (now.getHours() * 60 + now.getMinutes()) * 60 +
+        now.getSeconds();
+      const buf = Buffer.alloc(4);
+      buf.writeUInt32LE(encoded, 0);
+      await client.executeCmd(202, buf);
+      await client.disconnect();
+      this.logger.log(`Synced time on device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to set device time on ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async getDoorState(ip: string): Promise<{ state: number; label: string } | null> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_DOORSTATE_RRQ = 75
+      const response = await client.executeCmd(75);
+      await client.disconnect();
+
+      let state = 0;
+      let label = 'unknown';
+      if (Buffer.isBuffer(response) && response.length >= 1) {
+        state = response[response.length - 1];
+        // state 1 = door open, state 0 = door closed
+        label = state === 1 ? 'open' : state === 0 ? 'closed' : 'unknown';
+      }
+      return { state, label };
+    } catch (err) {
+      this.logger.warn(`Failed to get door state from ${ip}: ${this.errMsg(err)}`);
+      return null;
+    }
+  }
+
+  async unlockDoor(ip: string, delaySeconds = 5): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_UNLOCK = 31, data is the delay in seconds as a buffer
+      const delayBuf = Buffer.alloc(4);
+      delayBuf.writeUInt32LE(delaySeconds, 0);
+      await client.executeCmd(31, delayBuf);
+      await client.disconnect();
+      this.logger.log(`Unlocked door on device ${ip} for ${delaySeconds}s`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to unlock door on ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async restartDevice(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_RESTART = 1004 (client.restart() is broken over TCP)
+      await client.executeCmd(1004);
+      this.logger.log(`Restarted device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to restart device ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async freezeDevice(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      await client.disableDevice();
+      await client.disconnect();
+      this.logger.log(`Froze (disabled) device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to freeze device ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async unfreezeDevice(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      await client.enableDevice();
+      await client.disconnect();
+      this.logger.log(`Unfroze (enabled) device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to unfreeze device ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async testVoice(ip: string): Promise<boolean> {
+    try {
+      const Zklib = require('zklib-ts/dist/index.cjs.js');
+      const zk = new Zklib(ip, 4370, 5000, 10000);
+      await zk.createSocket();
+      await zk.voiceTest();
+      await zk.disconnect();
+      this.logger.log(`Tested voice on device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to test voice on ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async cancelAlarm(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // Clear alarm state using executeCmd with alarm flag off
+      await client.executeCmd(14, Buffer.from('~AlarmFlag=0\x00'));
+      await client.disconnect();
+      this.logger.log(`Cancelled alarm on device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to cancel alarm on ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async powerOffDevice(ip: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_POWEROFF = 1005 (client.powerOff() may not exist over TCP)
+      await client.executeCmd(1005);
+      this.logger.log(`Powered off device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to power off device ${ip}: ${this.errMsg(err)}`);
+      return false;
+    }
+  }
+
+  async getDeviceOptions(ip: string): Promise<string | null> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      let response: Buffer | null = null;
+      try {
+        response = await client.executeCmd(11);
+      } catch {
+        // executeCmd can throw if the device returns unexpected data
+        try { await client.disconnect(); } catch { /* skip */ }
+        return null;
+      }
+      try { await client.disconnect(); } catch { /* skip */ }
+      if (!response || !Buffer.isBuffer(response) || response.length < 16) return null;
+      // Skip the 16-byte header, decode the payload
+      const payload = response.subarray(16);
+      const text = payload.toString('utf-8').replace(/\0+$/, '').trim();
+      return text || null;
+    } catch (err) {
+      this.logger.warn(`Failed to get device options from ${ip}: ${this.errMsg(err)}`);
+      return null;
+    }
+  }
+
+  async setDeviceOptions(ip: string, data: string): Promise<boolean> {
+    try {
+      const ZKAttendanceClient = require('zk-attendance-sdk');
+      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+      await client.createSocket();
+      // CMD_OPTIONS_WRQ = 12
+      const payload = Buffer.from(data + '\x00', 'utf-8');
+      await client.executeCmd(12, payload);
+      await client.disconnect();
+      this.logger.log(`Set options on device ${ip}`);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Failed to set device options on ${ip}: ${this.errMsg(err)}`);
       return false;
     }
   }

@@ -178,6 +178,46 @@ export class LinksService {
     };
   }
 
+  /**
+   * One-time cleanup: merges standalone API entries into their matching
+   * FRONTEND entries by setting apiUrl, then deletes the API entries.
+   * Matching is done by stripping " API" suffix from the API entry name.
+   */
+  async cleanupDuplicateApiLinks() {
+    const links = await this.prisma.link.findMany({
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const apiEntries = links.filter((l) => l.systemType === 'API');
+    const frontendEntries = links.filter((l) => l.systemType === 'FRONTEND');
+
+    const results: { merged: string[]; deleted: string[]; skipped: string[] } = {
+      merged: [],
+      deleted: [],
+      skipped: [],
+    };
+
+    for (const api of apiEntries) {
+      const baseName = api.name.replace(/\s*API\s*$/, '').trim();
+      const match = frontendEntries.find(
+        (f) => f.name.trim() === baseName && !f.apiUrl,
+      );
+
+      if (match) {
+        await this.prisma.link.update({
+          where: { id: match.id },
+          data: { apiUrl: api.url },
+        });
+        await this.prisma.link.delete({ where: { id: api.id } });
+        results.merged.push(`${api.name} → ${match.name} (apiUrl=${api.url})`);
+      } else {
+        results.skipped.push(api.name);
+      }
+    }
+
+    return results;
+  }
+
   async setMaintenance(id: string, isMaintenance: boolean) {
     try {
       return await this.prisma.link.update({

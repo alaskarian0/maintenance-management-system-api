@@ -27,6 +27,12 @@ export class LinksController {
     return this.linksService.statusSummary();
   }
 
+  @Post('cleanup-duplicate-api')
+  @HttpCode(HttpStatus.OK)
+  cleanupDuplicateApi() {
+    return this.linksService.cleanupDuplicateApiLinks();
+  }
+
   @Get()
   findAll() {
     return this.linksService.findAll();

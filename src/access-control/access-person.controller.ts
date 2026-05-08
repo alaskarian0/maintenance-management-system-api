@@ -107,4 +107,9 @@ export class AccessPersonController {
   getPersonDoors(@Param('id') id: string) {
     return this.personService.getPersonDoors(id);
   }
+
+  @Get(':id/device-status')
+  checkPersonOnDevices(@Param('id') id: string) {
+    return this.personService.checkPersonOnDevices(id);
+  }
 }

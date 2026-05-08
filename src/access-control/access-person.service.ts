@@ -142,7 +142,7 @@ export class AccessPersonService {
 
   async update(
     id: string,
-    data: { name?: string; region?: string; note?: string; phone?: string; isActive?: boolean },
+    data: { name?: string; empCode?: string; region?: string; note?: string; phone?: string; isActive?: boolean },
   ) {
     const person = await this.prisma.accessPerson.findUnique({ where: { id } });
     if (!person) throw new NotFoundException('Person not found');
@@ -152,19 +152,31 @@ export class AccessPersonService {
 
     const updated = await this.prisma.accessPerson.update({ where: { id }, data });
 
-    let deviceSync: { success: number; failed: number; details: string[] } = { success: 0, failed: 0, details: [] };
+    const activeStatusChanged = wasActive !== willBeActive;
+    const dataChanged = willBeActive && (data.name || data.empCode);
 
-    // If active status changed, sync with physical devices
-    if (wasActive && !willBeActive) {
-      deviceSync = await this.removeFromAllDevices(person);
-    } else if (!wasActive && willBeActive) {
-      deviceSync = await this.pushToPermittedDevices(updated);
-    } else if (willBeActive && (data.name)) {
-      // Name changed while active — update on devices
-      deviceSync = await this.updateOnAllDevices(updated);
+    // Run device sync in the background — don't block the response
+    if (activeStatusChanged || dataChanged) {
+      const syncTarget = { ...updated };
+      // Fire-and-forget: update DB immediately, sync devices async
+      setImmediate(async () => {
+        try {
+          let result: { success: number; failed: number; details: string[] };
+          if (wasActive && !willBeActive) {
+            result = await this.removeFromAllDevices(syncTarget);
+          } else if (!wasActive && willBeActive) {
+            result = await this.pushToPermittedDevices(syncTarget);
+          } else {
+            result = await this.updateOnAllDevices(syncTarget);
+          }
+          this.logger.log(`Background device sync for "${syncTarget.name}": ${result.success} success, ${result.failed} failed`);
+        } catch (err) {
+          this.logger.warn(`Background device sync failed for "${syncTarget.name}": ${err instanceof Error ? err.message : err}`);
+        }
+      });
     }
 
-    return { ...updated, _deviceSync: deviceSync };
+    return { ...updated, _deviceSync: { success: 0, failed: 0, details: ['جارٍ المزامنة في الخلفية...'] } };
   }
 
   private async removeFromAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
@@ -512,6 +524,32 @@ export class AccessPersonService {
       where: { personId },
       include: { door: true },
     });
+  }
+
+  async checkPersonOnDevices(personId: string): Promise<Record<string, { exists: boolean; name?: string }>> {
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    const uid = person.personId || 0;
+    const empCode = person.empCode || String(uid);
+
+    const results: Record<string, { exists: boolean; name?: string }> = {};
+
+    for (const door of doors) {
+      if (!door.ipAddress) {
+        results[door.id] = { exists: false };
+        continue;
+      }
+      try {
+        const check = await this.fallback.checkUserOnDevice(door.ipAddress, uid, empCode);
+        results[door.id] = { exists: check.exists, name: check.name };
+      } catch {
+        results[door.id] = { exists: false };
+      }
+    }
+
+    return results;
   }
 
   async syncBiometricStatus(): Promise<{ updated: number; details: string[] }> {
