@@ -22,7 +22,7 @@ export class AccessLogController {
       dateTo,
       status,
       page: page ? parseInt(page, 10) : undefined,
-      pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
+      pageSize: Math.min(pageSize ? parseInt(pageSize, 10) : 50, 500),
     });
   }
 

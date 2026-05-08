@@ -349,7 +349,7 @@ model AccessLog {
   syncedFromZKBio Boolean       @default(false)
   createdAt       DateTime      @default(now())
 
-  @@index([doorId, punchTime(sort: Desc)])
+  @@unique([doorId, punchTime])
   @@index([personId, punchTime(sort: Desc)])
 }
 

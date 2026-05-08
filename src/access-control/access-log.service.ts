@@ -68,48 +68,57 @@ export class AccessLogService {
     }
 
     const logs = await this.fallback.getDeviceAttendanceLogs(door.ipAddress);
-    let synced = 0;
-    let skipped = 0;
+    if (logs.length === 0) {
+      return { synced: 0, skipped: 0, total: 0 };
+    }
 
-    for (const log of logs) {
-      // Check for duplicate by door + punchTime + deviceUserId
-      const existing = await this.prisma.accessLog.findFirst({
-        where: {
-          doorId: door.id,
-          punchTime: log.timestamp,
-        },
-      });
+    const uniqueDeviceUserIds = [...new Set(logs.map(l => String(l.deviceUserId)).filter(Boolean))];
+    const persons = uniqueDeviceUserIds.length > 0
+      ? await this.prisma.accessPerson.findMany({
+          where: {
+            OR: uniqueDeviceUserIds.flatMap(id => {
+              const num = parseInt(id, 10);
+              const conditions: { personId?: number; empCode?: string }[] = [{ empCode: id }];
+              if (!isNaN(num)) conditions.push({ personId: num });
+              return conditions;
+            }),
+          },
+          select: { id: true, personId: true, empCode: true },
+        })
+      : [];
 
-      if (existing) {
-        skipped++;
-        continue;
-      }
+    const personLookup = new Map<string, string>();
+    for (const p of persons) {
+      if (p.empCode) personLookup.set(p.empCode, p.id);
+      if (p.personId != null) personLookup.set(String(p.personId), p.id);
+    }
 
-      // Try to find matching person by deviceUserId (personId) or empCode
-      const deviceUserIdNum = parseInt(String(log.deviceUserId), 10);
-      const person = log.deviceUserId
-        ? await this.prisma.accessPerson.findFirst({
-            where: {
-              OR: [
-                ...(isNaN(deviceUserIdNum) ? [] : [{ personId: deviceUserIdNum }]),
-                { empCode: String(log.deviceUserId) },
-              ],
-            },
-          })
-        : null;
+    const createData = logs.map(log => {
+      const personId = personLookup.get(String(log.deviceUserId)) || null;
+      return {
+        personId,
+        doorId: door.id,
+        punchTime: log.timestamp,
+        punchState: log.state,
+        verifyType: log.verifyType,
+        status: personId ? 'authorized' as const : 'unknown' as const,
+        syncedFromZKBio: false,
+      };
+    });
 
-      await this.prisma.accessLog.create({
-        data: {
-          personId: person?.id || null,
-          doorId: door.id,
-          punchTime: log.timestamp,
-          punchState: log.state,
-          verifyType: log.verifyType,
-          status: person ? 'authorized' : 'unknown',
-          syncedFromZKBio: false, // kept for DB compat
-        },
-      });
-      synced++;
+    const result = await this.prisma.accessLog.createMany({
+      data: createData,
+      skipDuplicates: true,
+    });
+
+    const synced = result.count;
+    const skipped = logs.length - synced;
+
+    try {
+      await this.fallback.clearDeviceAttendanceLogs(door.ipAddress);
+      this.logger.log(`Cleared logs on device ${door.ipAddress} after syncing ${synced} records`);
+    } catch (err) {
+      this.logger.warn(`Failed to clear logs on device ${door.ipAddress}: ${err instanceof Error ? err.message : err}`);
     }
 
     return { synced, skipped, total: logs.length };
@@ -117,26 +126,34 @@ export class AccessLogService {
 
   async syncAllDevices(): Promise<{ doorId: string; doorName: string; synced: number; skipped: number; total: number; error?: string }[]> {
     const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
-    const results = [];
+    const activeDoors = doors.filter(d => d.ipAddress);
+    const results: { doorId: string; doorName: string; synced: number; skipped: number; total: number; error?: string }[] = [];
 
-    for (const door of doors) {
-      if (!door.ipAddress) continue;
-      try {
-        const sync = await this.syncFromDevice(door.id);
-        results.push({
-          doorId: door.id,
-          doorName: door.name,
-          ...sync,
-        });
-      } catch (err) {
-        results.push({
-          doorId: door.id,
-          doorName: door.name,
-          synced: 0,
-          skipped: 0,
-          total: 0,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    const CONCURRENCY = 10;
+    for (let i = 0; i < activeDoors.length; i += CONCURRENCY) {
+      const chunk = activeDoors.slice(i, i + CONCURRENCY);
+      const settled = await Promise.allSettled(
+        chunk.map(async (door) => {
+          const sync = await this.syncFromDevice(door.id);
+          return { doorId: door.id, doorName: door.name, ...sync };
+        }),
+      );
+
+      for (let j = 0; j < settled.length; j++) {
+        const outcome = settled[j];
+        if (outcome.status === 'fulfilled') {
+          results.push(outcome.value);
+        } else {
+          const door = chunk[j];
+          results.push({
+            doorId: door.id,
+            doorName: door.name,
+            synced: 0,
+            skipped: 0,
+            total: 0,
+            error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+          });
+        }
       }
     }
 
