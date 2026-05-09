@@ -69,7 +69,7 @@ export class AccessLogService {
 
     // Find a device with IP address under this door
     const device = door?.devices.find(d => d.ipAddress);
-    if (!device?.ipAddress) {
+    if (!door || !device?.ipAddress) {
       return { synced: 0, skipped: 0, total: 0 };
     }
 

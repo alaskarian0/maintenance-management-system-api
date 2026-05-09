@@ -652,7 +652,7 @@ export class AccessPersonService {
       throw new NotFoundException(`Door "${door.name}" has no devices with IP address configured`);
     }
 
-    const deviceUsers: DeviceUserInfo[] = await this.fallback.getDeviceUsers(device.ipAddress);
+    const deviceUsers: DeviceUserInfo[] = await this.fallback.getDeviceUsers(device.ipAddress!);
     if (deviceUsers.length === 0) {
       details.push(`لا يوجد مستخدمين على الجهاز ${device.ipAddress}`);
       return { synced: 0, created: 0, updated: 0, details };

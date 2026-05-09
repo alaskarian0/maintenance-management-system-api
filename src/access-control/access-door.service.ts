@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService } from './access-fallback.service';
+import { CreateDoorDto } from './dto/create-door.dto';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 
@@ -11,33 +12,73 @@ export class AccessDoorService {
     private fallback: AccessFallbackService,
   ) {}
 
+  // ── Helpers ──────────────────────────────────────────────────────
+
+  /** Flatten first-device fields onto the door object so the frontend
+   *  can read door.ipAddress / door.state / door.serialNumber directly. */
+  private flattenDoor(door: any) {
+    const primary = door.devices?.[0];
+    return {
+      ...door,
+      ipAddress: primary?.ipAddress ?? null,
+      serialNumber: primary?.serialNumber ?? null,
+      zkTerminalId: primary?.zkTerminalId ?? null,
+      state: primary?.state ?? 3,
+      lastActivity: primary?.lastActivity ?? null,
+      isAttendance: primary?.isAttendance ?? true,
+    };
+  }
+
   // ── Door CRUD ────────────────────────────────────────────────────
 
   async findAll() {
-    return this.prisma.accessDoor.findMany({
+    const doors = await this.prisma.accessDoor.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
         devices: { orderBy: { side: 'asc' } },
         _count: { select: { permissions: true, logs: true } },
       },
     });
+    return doors.map((d: any) => this.flattenDoor(d));
   }
 
   async findOne(id: string) {
-    return this.prisma.accessDoor.findUnique({
+    const door = await this.prisma.accessDoor.findUnique({
       where: { id },
       include: {
         devices: { orderBy: { side: 'asc' } },
         permissions: { include: { person: true } },
       },
     });
+    return door ? this.flattenDoor(door) : null;
   }
 
-  async create(data: { name: string; location?: string }) {
-    return this.prisma.accessDoor.create({ data });
+  async create(dto: CreateDoorDto) {
+    const door = await this.prisma.accessDoor.create({
+      data: {
+        name: dto.name,
+        location: dto.location,
+        group: dto.group,
+      },
+    });
+
+    // Auto-create a device when ipAddress is provided
+    if (dto.ipAddress) {
+      await this.prisma.accessDevice.create({
+        data: {
+          doorId: door.id,
+          name: dto.name,
+          side: 'INSIDE',
+          ipAddress: dto.ipAddress,
+          serialNumber: dto.serialNumber,
+        },
+      });
+    }
+
+    return this.findOne(door.id);
   }
 
-  async update(id: string, data: { name?: string; location?: string }) {
+  async update(id: string, data: { name?: string; location?: string; group?: 'INSIDE' | 'OUTSIDE' }) {
     return this.prisma.accessDoor.update({ where: { id }, data });
   }
 

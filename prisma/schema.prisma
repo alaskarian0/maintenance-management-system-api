@@ -179,6 +179,11 @@ enum MaintenanceStatus {
   RESOLVED
 }
 
+enum DoorGroup {
+  INSIDE
+  OUTSIDE
+}
+
 enum DeviceSide {
   INSIDE
   OUTSIDE
@@ -291,6 +296,7 @@ model AccessDoor {
   id           String     @id @default(cuid())
   name         String
   location     String?
+  group        DoorGroup?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   devices      AccessDevice[]
