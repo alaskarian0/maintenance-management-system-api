@@ -92,7 +92,7 @@ export class AccessPersonService {
     return this.prisma.accessPerson.findUnique({
       where: { id },
       include: {
-        permissions: { include: { door: true } },
+        permissions: { include: { door: { include: { devices: true } } } },
       },
     });
   }
@@ -159,109 +159,127 @@ export class AccessPersonService {
     return { ...updated, _deviceSync: { success: 0, failed: 0, details: ['جارٍ المزامنة في الخلفية...'] } };
   }
 
-  private async removeFromAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
+  private async getPermittedDevices(personId: string): Promise<{ id: string; name: string; ipAddress: string | null; state: number; doorId: string; doorName: string }[]> {
     const permissions = await this.prisma.accessPermission.findMany({
-      where: { personId: person.id },
-      include: { door: true },
+      where: { personId },
+      include: { door: { include: { devices: true } } },
     });
 
-    const permittedDoors = permissions.map(p => p.door).filter(d => d?.ipAddress);
+    const devices: { id: string; name: string; ipAddress: string | null; state: number; doorId: string; doorName: string }[] = [];
+    for (const perm of permissions) {
+      for (const device of perm.door.devices) {
+        devices.push({
+          id: device.id,
+          name: device.name,
+          ipAddress: device.ipAddress,
+          state: device.state,
+          doorId: perm.door.id,
+          doorName: perm.door.name,
+        });
+      }
+    }
+    return devices;
+  }
+
+  private async getAllOnlineDevices(): Promise<{ id: string; name: string; ipAddress: string | null; state: number; doorId: string }[]> {
+    const devices = await this.prisma.accessDevice.findMany({
+      where: { state: 1, ipAddress: { not: null } },
+    });
+    return devices;
+  }
+
+  private async removeFromAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
+    const permittedDevices = await this.getPermittedDevices(person.id);
     const uid = person.personId || 0;
     let success = 0;
     let failed = 0;
     const details: string[] = [];
 
-    const onlineDoors = permittedDoors.filter(d => d!.state === 1);
-    const offlineDoors = permittedDoors.filter(d => d!.state !== 1);
+    const onlineDevices = permittedDevices.filter(d => d.ipAddress && d.state === 1);
+    const offlineDevices = permittedDevices.filter(d => d.ipAddress && d.state !== 1);
 
     // Process online permitted devices
-    for (const door of onlineDoors) {
+    for (const device of onlineDevices) {
       try {
         // Save biometric templates before blocking (best-effort)
         try {
-          const pulled = await this.biometric.pullAndStoreTemplates(person.id, door.ipAddress!);
+          const pulled = await this.biometric.pullAndStoreTemplates(person.id, device.ipAddress!);
           if (pulled.fingers > 0) {
-            this.logger.log(`Saved ${pulled.fingers} fingerprint templates from ${door.name} before blocking`);
+            this.logger.log(`Saved ${pulled.fingers} fingerprint templates from ${device.name} before blocking`);
           }
         } catch (err) {
-          this.logger.warn(`Failed to pull templates from ${door.name}: ${err instanceof Error ? err.message : err}`);
+          this.logger.warn(`Failed to pull templates from ${device.name}: ${err instanceof Error ? err.message : err}`);
         }
 
-        const removed = await this.fallback.deleteUserFromDevice(door.ipAddress!, uid, person.name, person.empCode || undefined);
+        const removed = await this.fallback.deleteUserFromDevice(device.ipAddress!, uid, person.name, person.empCode || undefined);
         if (removed) {
           success++;
-          this.logger.log(`Blocked "${person.name}" on device ${door.name} (${door.ipAddress})`);
+          this.logger.log(`Blocked "${person.name}" on device ${device.name} (${device.ipAddress})`);
         } else {
           failed++;
-          details.push(`فشل الحظر على ${door.name}`);
-          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
+          details.push(`فشل الحظر على ${device.name}`);
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode: '' });
         }
       } catch {
         failed++;
-        details.push(`خطأ على ${door.name}`);
-        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
+        details.push(`خطأ على ${device.name}`);
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode: '' });
       }
     }
 
     // Queue offline permitted devices for retry
-    for (const door of offlineDoors) {
-      details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-      await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode: '' });
+    for (const device of offlineDevices) {
+      details.push(`${device.name} غير متصل — سيتم عند الاتصال`);
+      await this.enqueueOp({ personId: person.id, personName: person.name, type: 'block', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode: '' });
     }
 
     return { success, failed, details };
   }
 
   private async pushToPermittedDevices(person: { id: string; personId: number | null; empCode: string | null; name: string }): Promise<{ success: number; failed: number; details: string[] }> {
-    const permissions = await this.prisma.accessPermission.findMany({
-      where: { personId: person.id },
-      include: { door: true },
-    });
-
     const empCode = person.empCode || `P${person.personId || Date.now()}`;
     const uid = person.personId || Math.abs(person.id.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0));
 
-    if (permissions.length === 0) {
+    const permittedDevices = await this.getPermittedDevices(person.id);
+    if (permittedDevices.length === 0) {
       return { success: 0, failed: 0, details: ['لا توجد أبواب مصرح بها — حدد الأبواب أولاً'] };
     }
-
-    const doorsToPush = permissions.map((p) => p.door).filter((d) => d?.ipAddress);
 
     let success = 0;
     let failed = 0;
     const details: string[] = [];
 
-    for (const door of doorsToPush) {
-      if (!door?.ipAddress) continue;
-      if (door.state !== 1) {
-        details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+    for (const device of permittedDevices) {
+      if (!device.ipAddress) continue;
+      if (device.state !== 1) {
+        details.push(`${device.name} غير متصل — سيتم عند الاتصال`);
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode });
         continue;
       }
       try {
-        const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
+        const pushed = await this.fallback.pushUserToDevice(device.ipAddress, uid, empCode, person.name);
         if (pushed) {
           success++;
-          this.logger.log(`Pushed "${person.name}" to device ${door.name} (${door.ipAddress})`);
+          this.logger.log(`Pushed "${person.name}" to device ${device.name} (${device.ipAddress})`);
 
           // Restore biometric templates (best-effort)
           try {
-            const restored = await this.biometric.restoreTemplates(person.id, door.ipAddress!);
+            const restored = await this.biometric.restoreTemplates(person.id, device.ipAddress!);
             if (restored.fingers > 0) {
-              this.logger.log(`Restored ${restored.fingers} fingerprints for "${person.name}" on ${door.name}`);
+              this.logger.log(`Restored ${restored.fingers} fingerprints for "${person.name}" on ${device.name}`);
             }
           } catch (err) {
-            this.logger.warn(`Failed to restore templates on ${door.name}: ${err instanceof Error ? err.message : err}`);
+            this.logger.warn(`Failed to restore templates on ${device.name}: ${err instanceof Error ? err.message : err}`);
           }
         } else {
           failed++;
-          details.push(`فشل الإرسال إلى ${door.name}`);
-          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+          details.push(`فشل الإرسال إلى ${device.name}`);
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode });
         }
       } catch {
         failed++;
-        details.push(`خطأ على ${door.name}`);
-        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+        details.push(`خطأ على ${device.name}`);
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'push', doorId: device.doorId, doorName: device.doorName || device.name, doorIp: device.ipAddress!, uid, empCode });
       }
     }
 
@@ -271,34 +289,34 @@ export class AccessPersonService {
   private async updateOnAllDevices(person: { id: string; personId: number | null; empCode: string | null; name: string; isActive: boolean }): Promise<{ success: number; failed: number; details: string[] }> {
     if (!person.isActive) return { success: 0, failed: 0, details: [] };
 
-    const allDoors = await this.prisma.accessDoor.findMany();
+    const allDevices = await this.getAllOnlineDevices();
     const uid = person.personId || 0;
     const empCode = person.empCode || String(uid);
     let success = 0;
     let failed = 0;
     const details: string[] = [];
 
-    for (const door of allDoors) {
-      if (!door.ipAddress) continue;
-      if (door.state !== 1) {
-        details.push(`${door.name} غير متصل — سيتم عند الاتصال`);
-        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+    for (const device of allDevices) {
+      if (!device.ipAddress) continue;
+      if (device.state !== 1) {
+        details.push(`${device.name} غير متصل — سيتم عند الاتصال`);
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: device.doorId, doorName: device.name, doorIp: device.ipAddress!, uid, empCode });
         continue;
       }
       try {
-        const pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
+        const pushed = await this.fallback.pushUserToDevice(device.ipAddress, uid, empCode, person.name);
         if (pushed) {
           success++;
-          this.logger.log(`Updated "${person.name}" on device ${door.name} (${door.ipAddress})`);
+          this.logger.log(`Updated "${person.name}" on device ${device.name} (${device.ipAddress})`);
         } else {
           failed++;
-          details.push(`فشل التحديث على ${door.name}`);
-          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+          details.push(`فشل التحديث على ${device.name}`);
+          await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: device.doorId, doorName: device.name, doorIp: device.ipAddress!, uid, empCode });
         }
       } catch {
         failed++;
-        details.push(`خطأ على ${door.name}`);
-        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: door.id, doorName: door.name, doorIp: door.ipAddress!, uid, empCode });
+        details.push(`خطأ على ${device.name}`);
+        await this.enqueueOp({ personId: person.id, personName: person.name, type: 'update', doorId: device.doorId, doorName: device.name, doorIp: device.ipAddress!, uid, empCode });
       }
     }
 
@@ -340,8 +358,12 @@ export class AccessPersonService {
     let removed = 0;
 
     for (const op of pending) {
-      const door = await this.prisma.accessDoor.findUnique({ where: { id: op.doorId } });
-      if (!door || door.state !== 1) {
+      // Find a device with this IP under the referenced door
+      const device = await this.prisma.accessDevice.findFirst({
+        where: { doorId: op.doorId, ipAddress: op.doorIp },
+      });
+
+      if (!device || device.state !== 1) {
         const newRetries = op.retries + 1;
         if (newRetries > 20) {
           await this.prisma.pendingDeviceOp.update({
@@ -428,7 +450,7 @@ export class AccessPersonService {
     return this.prisma.pendingDeviceOp.findMany({
       where: { status: { in: ['pending', 'in_progress', 'failed'] } },
       orderBy: { createdAt: 'desc' },
-      include: { door: { select: { name: true, state: true } } },
+      include: { door: { select: { name: true } } },
     });
   }
 
@@ -464,35 +486,47 @@ export class AccessPersonService {
     const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
     if (!person) throw new NotFoundException('Person not found');
 
-    const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: doorId },
+      include: { devices: true },
+    });
     if (!door) throw new NotFoundException('Door not found');
-    if (!door.ipAddress) throw new NotFoundException('Door has no IP address');
 
     const uid = person.personId || 0;
     const empCode = person.empCode || String(uid);
 
     let pushed = false;
-    try {
-      pushed = await this.fallback.pushUserToDevice(door.ipAddress, uid, empCode, person.name);
-      if (pushed) {
-        details.push(`تم إرسال "${person.name}" إلى ${door.name}`);
-      } else {
-        details.push(`فشل الإرسال إلى ${door.name}`);
+    // Push to all devices under this door
+    for (const device of door.devices) {
+      if (!device.ipAddress) continue;
+      try {
+        const ok = await this.fallback.pushUserToDevice(device.ipAddress, uid, empCode, person.name);
+        if (ok) {
+          pushed = true;
+          details.push(`تم إرسال "${person.name}" إلى ${device.name}`);
+        } else {
+          details.push(`فشل الإرسال إلى ${device.name}`);
+        }
+      } catch (err) {
+        details.push(`خطأ: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      details.push(`خطأ: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Also restore biometric templates (best-effort)
     let bioResult = { fingers: 0, face: false };
     if (pushed) {
-      try {
-        bioResult = await this.biometric.restoreTemplates(personId, door.ipAddress);
-        if (bioResult.fingers > 0) {
-          details.push(`تم استعادة ${bioResult.fingers} بصمة`);
+      for (const device of door.devices) {
+        if (!device.ipAddress) continue;
+        try {
+          const result = await this.biometric.restoreTemplates(personId, device.ipAddress);
+          bioResult.fingers += result.fingers;
+          bioResult.face = bioResult.face || result.face;
+          if (result.fingers > 0) {
+            details.push(`تم استعادة ${result.fingers} بصمة على ${device.name}`);
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to restore templates on push: ${err instanceof Error ? err.message : err}`);
         }
-      } catch (err) {
-        this.logger.warn(`Failed to restore templates on push: ${err instanceof Error ? err.message : err}`);
       }
     }
 
@@ -502,7 +536,7 @@ export class AccessPersonService {
   async getPersonDoors(personId: string) {
     return this.prisma.accessPermission.findMany({
       where: { personId },
-      include: { door: true },
+      include: { door: { include: { devices: true } } },
     });
   }
 
@@ -510,22 +544,22 @@ export class AccessPersonService {
     const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
     if (!person) throw new NotFoundException('Person not found');
 
-    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    const devices = await this.prisma.accessDevice.findMany({ where: { state: 1 } });
     const uid = person.personId || 0;
     const empCode = person.empCode || String(uid);
 
     const results: Record<string, { exists: boolean; name?: string }> = {};
 
-    for (const door of doors) {
-      if (!door.ipAddress) {
-        results[door.id] = { exists: false };
+    for (const device of devices) {
+      if (!device.ipAddress) {
+        results[device.id] = { exists: false };
         continue;
       }
       try {
-        const check = await this.fallback.checkUserOnDevice(door.ipAddress, uid, empCode);
-        results[door.id] = { exists: check.exists, name: check.name };
+        const check = await this.fallback.checkUserOnDevice(device.ipAddress, uid, empCode);
+        results[device.id] = { exists: check.exists, name: check.name };
       } catch {
-        results[door.id] = { exists: false };
+        results[device.id] = { exists: false };
       }
     }
 
@@ -546,16 +580,16 @@ export class AccessPersonService {
         return { updated: 0, details };
       }
 
-      const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+      const devices = await this.prisma.accessDevice.findMany({ where: { state: 1 } });
 
       for (const person of persons) {
         let found = false;
 
-        for (const door of doors) {
-          if (!door.ipAddress) continue;
+        for (const device of devices) {
+          if (!device.ipAddress) continue;
 
           try {
-            const users = await this.fallback.getDeviceUsers(door.ipAddress);
+            const users = await this.fallback.getDeviceUsers(device.ipAddress);
             const match = users.find(
               (u) => u.userId === person.empCode || u.uid === person.personId,
             );
@@ -569,7 +603,7 @@ export class AccessPersonService {
                   lastSyncAt: new Date(),
                 },
               });
-              details.push(`${person.name}: مسجّل على ${door.name} (UID: ${match.uid})`);
+              details.push(`${person.name}: مسجّل على ${device.name} (UID: ${match.uid})`);
               found = true;
               break;
             }
@@ -603,24 +637,33 @@ export class AccessPersonService {
     let created = 0;
     let updated = 0;
 
-    const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: doorId },
+      include: { devices: true },
+    });
+
     if (!door) {
       throw new NotFoundException(`Door ${doorId} not found`);
     }
-    if (!door.ipAddress) {
-      throw new NotFoundException(`Door "${door.name}" has no IP address configured`);
+
+    // Find a device with IP under this door
+    const device = door.devices.find(d => d.ipAddress);
+    if (!device) {
+      throw new NotFoundException(`Door "${door.name}" has no devices with IP address configured`);
     }
 
-    const deviceUsers: DeviceUserInfo[] = await this.fallback.getDeviceUsers(door.ipAddress);
+    const deviceUsers: DeviceUserInfo[] = await this.fallback.getDeviceUsers(device.ipAddress);
     if (deviceUsers.length === 0) {
-      details.push(`لا يوجد مستخدمين على الجهاز ${door.ipAddress}`);
+      details.push(`لا يوجد مستخدمين على الجهاز ${device.ipAddress}`);
       return { synced: 0, created: 0, updated: 0, details };
     }
 
-    details.push(`تم العثور على ${deviceUsers.length} مستخدم على جهاز ${door.name} (${door.ipAddress})`);
+    details.push(`تم العثور على ${deviceUsers.length} مستخدم على جهاز ${device.name} (${device.ipAddress})`);
 
-    const allDoors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
-    const otherDoors = allDoors.filter(d => d.id !== door.id && d.ipAddress);
+    // Get all other online devices across all doors
+    const allOtherDevices = await this.prisma.accessDevice.findMany({
+      where: { state: 1, ipAddress: { not: null }, id: { not: device.id } },
+    });
 
     for (const deviceUser of deviceUsers) {
       const existingPerson = await this.prisma.accessPerson.findFirst({
@@ -675,28 +718,34 @@ export class AccessPersonService {
       }
 
       try {
-        await this.biometric.pullAndStoreTemplates(person.id, door.ipAddress!);
+        await this.biometric.pullAndStoreTemplates(person.id, device.ipAddress!);
       } catch (err) {
-        this.logger.warn(`Failed to pull templates for "${person.name}" from ${door.name}: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Failed to pull templates for "${person.name}" from ${device.name}: ${err instanceof Error ? err.message : err}`);
       }
 
-      if (otherDoors.length > 0 && person.isActive) {
+      if (allOtherDevices.length > 0 && person.isActive) {
         const permissions = await this.prisma.accessPermission.findMany({
           where: { personId: person.id },
-          include: { door: true },
+          include: { door: { include: { devices: true } } },
         });
         const uid = person.personId || 0;
         const empCode = person.empCode || String(uid);
 
-        const permittedOtherDoors = permissions
-          .map(p => p.door)
-          .filter(d => d?.ipAddress && d.id !== door.id && d.state === 1);
+        // Get all device IPs from permitted doors (excluding current device)
+        const permittedOtherDevices: { ipAddress: string; name: string }[] = [];
+        for (const perm of permissions) {
+          for (const d of perm.door.devices) {
+            if (d.ipAddress && d.id !== device.id && d.state === 1) {
+              permittedOtherDevices.push({ ipAddress: d.ipAddress!, name: d.name });
+            }
+          }
+        }
 
-        for (const targetDoor of permittedOtherDoors) {
+        for (const targetDevice of permittedOtherDevices) {
           try {
-            const pushed = await this.fallback.pushUserToDevice(targetDoor.ipAddress!, uid, empCode, person.name);
+            const pushed = await this.fallback.pushUserToDevice(targetDevice.ipAddress, uid, empCode, person.name);
             if (pushed) {
-              this.logger.log(`Sync: pushed "${person.name}" to ${targetDoor.name} (${targetDoor.ipAddress})`);
+              this.logger.log(`Sync: pushed "${person.name}" to ${targetDevice.name} (${targetDevice.ipAddress})`);
             }
           } catch {
             // Best-effort

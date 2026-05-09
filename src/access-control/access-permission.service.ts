@@ -60,7 +60,7 @@ export class AccessPermissionService {
   async revoke(id: string) {
     const perm = await this.prisma.accessPermission.findUnique({
       where: { id },
-      include: { person: true, door: true },
+      include: { person: true, door: { include: { devices: true } } },
     });
 
     const result = await this.prisma.accessPermission.delete({ where: { id } });
@@ -79,7 +79,7 @@ export class AccessPermissionService {
   async revokeByPersonDoor(personId: string, doorId: string) {
     const perm = await this.prisma.accessPermission.findUnique({
       where: { personId_doorId: { personId, doorId } },
-      include: { person: true, door: true },
+      include: { person: true, door: { include: { devices: true } } },
     });
 
     const result = await this.prisma.accessPermission.delete({
@@ -106,20 +106,28 @@ export class AccessPermissionService {
     }
 
     const empCode = person.empCode || `P${person.personId || Date.now()}`;
+    const uid = person.personId || Math.abs(person.id.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0));
 
-    const doors = doorId
-      ? [await this.prisma.accessDoor.findUnique({ where: { id: doorId } })]
-      : await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    let devices: { id: string; name: string; ipAddress: string | null; state: number }[] = [];
+
+    if (doorId) {
+      const door = await this.prisma.accessDoor.findUnique({
+        where: { id: doorId },
+        include: { devices: true },
+      });
+      devices = (door?.devices || []).map(d => ({ id: d.id, name: d.name, ipAddress: d.ipAddress, state: d.state }));
+    } else {
+      devices = await this.prisma.accessDevice.findMany({ where: { state: 1 } });
+    }
 
     let successCount = 0;
     let failCount = 0;
 
-    for (const door of doors) {
-      if (!door?.ipAddress) continue;
+    for (const device of devices) {
+      if (!device.ipAddress) continue;
 
-      const uid = person.personId || Math.abs(person.id.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0));
       const pushed = await this.fallback.pushUserToDevice(
-        door.ipAddress,
+        device.ipAddress,
         uid,
         empCode,
         person.name,
@@ -149,7 +157,7 @@ export class AccessPermissionService {
 
   private async syncRevoke(
     person: { id: string; name: string; empCode: string | null; personId: number | null } | null,
-    door: { id: string; name: string; ipAddress?: string | null } | null,
+    door: { id: string; devices?: { id: string; name: string; ipAddress: string | null; state: number }[] } | null,
   ): Promise<SyncResult> {
     if (!person) {
       return { synced: false, message: 'No person provided' };
@@ -157,24 +165,31 @@ export class AccessPermissionService {
 
     const uid = person.personId || 0;
 
-    if (door?.ipAddress) {
-      const removed = await this.fallback.deleteUserFromDevice(door.ipAddress, uid);
-      if (removed) {
-        return { synced: true, message: `Employee removed from device "${door.name}" via ZK SDK` };
+    // Get devices from the specific door
+    if (door?.devices?.length) {
+      for (const device of door.devices) {
+        if (device.ipAddress) {
+          const removed = await this.fallback.deleteUserFromDevice(device.ipAddress, uid);
+          if (removed) {
+            return { synced: true, message: `Employee removed from device "${device.name}" via ZK SDK` };
+          }
+        }
       }
     }
 
-    // If no specific door or the specific door failed, try all active doors the person has access to
+    // If no specific door or the specific door failed, try all devices the person has access to
     const permissions = await this.prisma.accessPermission.findMany({
       where: { personId: person.id },
-      include: { door: true },
+      include: { door: { include: { devices: true } } },
     });
 
     let removed = false;
     for (const perm of permissions) {
-      if (perm.door?.ipAddress) {
-        const success = await this.fallback.deleteUserFromDevice(perm.door.ipAddress, uid);
-        if (success) removed = true;
+      for (const device of perm.door.devices) {
+        if (device.ipAddress) {
+          const success = await this.fallback.deleteUserFromDevice(device.ipAddress, uid);
+          if (success) removed = true;
+        }
       }
     }
 

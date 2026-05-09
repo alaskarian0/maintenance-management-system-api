@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService } from './access-fallback.service';
+import { CreateDeviceDto } from './dto/create-device.dto';
+import { UpdateDeviceDto } from './dto/update-device.dto';
 
 @Injectable()
 export class AccessDoorService {
@@ -9,31 +11,13 @@ export class AccessDoorService {
     private fallback: AccessFallbackService,
   ) {}
 
-  private async getDoorIp(id: string): Promise<string> {
-    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
-    if (!door) throw new NotFoundException('Door not found');
-    if (!door.ipAddress) throw new NotFoundException('Door has no IP address configured');
-    return door.ipAddress;
-  }
-
-  private async getDoorRecord(id: string): Promise< { ipAddress: string; serialNumber: string | null; id: string; [key: string]: any } > {
-    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
-    if (!door) throw new NotFoundException('Door not found');
-    if (!door.ipAddress) throw new NotFoundException('Door has no IP address configured');
-    return door as typeof door & { ipAddress: string };
-  }
-
-  private async execAction(id: string, fn: (ip: string) => Promise<boolean>, label: string) {
-    const ip = await this.getDoorIp(id);
-    const ok = await fn(ip);
-    if (!ok) throw new Error(`Failed to ${label}`);
-    return { success: true };
-  }
+  // ── Door CRUD ────────────────────────────────────────────────────
 
   async findAll() {
     return this.prisma.accessDoor.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
+        devices: { orderBy: { side: 'asc' } },
         _count: { select: { permissions: true, logs: true } },
       },
     });
@@ -43,26 +27,17 @@ export class AccessDoorService {
     return this.prisma.accessDoor.findUnique({
       where: { id },
       include: {
+        devices: { orderBy: { side: 'asc' } },
         permissions: { include: { person: true } },
       },
     });
   }
 
-  async create(data: {
-    name: string;
-    location?: string;
-    group?: 'INSIDE' | 'OUTSIDE';
-    serialNumber?: string;
-    ipAddress?: string;
-    zkTerminalId?: number;
-  }) {
+  async create(data: { name: string; location?: string }) {
     return this.prisma.accessDoor.create({ data });
   }
 
-  async update(
-    id: string,
-    data: { name?: string; location?: string; group?: 'INSIDE' | 'OUTSIDE'; isAttendance?: boolean },
-  ) {
+  async update(id: string, data: { name?: string; location?: string }) {
     return this.prisma.accessDoor.update({ where: { id }, data });
   }
 
@@ -77,29 +52,80 @@ export class AccessDoorService {
     });
   }
 
-  async pingDoor(id: string): Promise<{ reachable: boolean; ip: string; responseMs: number | null; message: string }> {
-    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
-    if (!door) {
-      return { reachable: false, ip: '', responseMs: null, message: 'Door not found' };
+  // ── Device CRUD ──────────────────────────────────────────────────
+
+  async createDevice(doorId: string, dto: CreateDeviceDto) {
+    const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
+    if (!door) throw new NotFoundException('Door not found');
+    return this.prisma.accessDevice.create({
+      data: {
+        doorId,
+        name: dto.name,
+        side: dto.side || 'INSIDE',
+        serialNumber: dto.serialNumber,
+        ipAddress: dto.ipAddress,
+        zkTerminalId: dto.zkTerminalId,
+        isAttendance: dto.isAttendance ?? true,
+      },
+    });
+  }
+
+  async updateDevice(doorId: string, deviceId: string, dto: UpdateDeviceDto) {
+    const device = await this.prisma.accessDevice.findFirst({
+      where: { id: deviceId, doorId },
+    });
+    if (!device) throw new NotFoundException('Device not found');
+    return this.prisma.accessDevice.update({
+      where: { id: deviceId },
+      data: dto,
+    });
+  }
+
+  async removeDevice(doorId: string, deviceId: string) {
+    const device = await this.prisma.accessDevice.findFirst({
+      where: { id: deviceId, doorId },
+    });
+    if (!device) throw new NotFoundException('Device not found');
+    return this.prisma.accessDevice.delete({ where: { id: deviceId } });
+  }
+
+  // ── Device helpers ───────────────────────────────────────────────
+
+  private async getDeviceRecord(id: string) {
+    const device = await this.prisma.accessDevice.findUnique({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    if (!device.ipAddress) throw new NotFoundException('Device has no IP address configured');
+    return device;
+  }
+
+  private async execAction(deviceId: string, fn: (ip: string) => Promise<boolean>, label: string) {
+    const device = await this.getDeviceRecord(deviceId);
+    const ok = await fn(device.ipAddress!);
+    if (!ok) throw new Error(`Failed to ${label}`);
+    return { success: true };
+  }
+
+  // ── Ping / Status ────────────────────────────────────────────────
+
+  async pingDevice(deviceId: string): Promise<{ reachable: boolean; ip: string; responseMs: number | null; message: string }> {
+    const device = await this.prisma.accessDevice.findUnique({ where: { id: deviceId } });
+    if (!device) {
+      return { reachable: false, ip: '', responseMs: null, message: 'Device not found' };
     }
 
-    const ip = door.ipAddress || door.name;
+    const ip = device.ipAddress || device.name;
     const start = Date.now();
 
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3000);
-
-      await fetch(`http://${ip}`, {
-        signal: controller.signal,
-      });
-
+      await fetch(`http://${ip}`, { signal: controller.signal });
       clearTimeout(timeout);
       const responseMs = Date.now() - start;
 
-      if (door.state !== 1) {
-        await this.prisma.accessDoor.update({
-          where: { id },
+      if (device.state !== 1) {
+        await this.prisma.accessDevice.update({
+          where: { id: deviceId },
           data: { state: 1, lastActivity: new Date() },
         });
       }
@@ -113,18 +139,18 @@ export class AccessDoorService {
         await client.disconnect();
         const tcpMs = Date.now() - start;
 
-        if (door.state !== 1) {
-          await this.prisma.accessDoor.update({
-            where: { id },
+        if (device.state !== 1) {
+          await this.prisma.accessDevice.update({
+            where: { id: deviceId },
             data: { state: 1, lastActivity: new Date() },
           });
         }
 
         return { reachable: true, ip, responseMs: tcpMs, message: `Device reachable via ZK port (${tcpMs}ms)` };
       } catch {
-        if (door.state !== 3) {
-          await this.prisma.accessDoor.update({
-            where: { id },
+        if (device.state !== 3) {
+          await this.prisma.accessDevice.update({
+            where: { id: deviceId },
             data: { state: 3 },
           });
         }
@@ -134,15 +160,16 @@ export class AccessDoorService {
     }
   }
 
-  async pingAllDoors(): Promise<{ id: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[]> {
-    const doors = await this.prisma.accessDoor.findMany();
+  async pingAllDevices(): Promise<{ id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[]> {
+    const devices = await this.prisma.accessDevice.findMany();
     const results = [];
 
-    for (const door of doors) {
-      const result = await this.pingDoor(door.id);
+    for (const device of devices) {
+      const result = await this.pingDevice(device.id);
       results.push({
-        id: door.id,
-        name: door.name,
+        id: device.id,
+        doorId: device.doorId,
+        name: device.name,
         reachable: result.reachable,
         ip: result.ip,
         responseMs: result.responseMs,
@@ -152,15 +179,15 @@ export class AccessDoorService {
     return results;
   }
 
-  async discoverDeviceInfo(id: string): Promise<{ serialNumber: string | null; firmware: string | null; deviceName: string | null } | null> {
-    const door = await this.prisma.accessDoor.findUnique({ where: { id } });
-    if (!door?.ipAddress) return null;
+  async discoverDeviceInfo(deviceId: string): Promise<{ serialNumber: string | null; firmware: string | null; deviceName: string | null } | null> {
+    const device = await this.prisma.accessDevice.findUnique({ where: { id: deviceId } });
+    if (!device?.ipAddress) return null;
 
-    const info = await this.fallback.getDeviceInfo(door.ipAddress);
+    const info = await this.fallback.getDeviceInfo(device.ipAddress);
 
-    if (info?.serialNumber && !door.serialNumber) {
-      await this.prisma.accessDoor.update({
-        where: { id },
+    if (info?.serialNumber && !device.serialNumber) {
+      await this.prisma.accessDevice.update({
+        where: { id: deviceId },
         data: { serialNumber: info.serialNumber },
       });
     }
@@ -168,82 +195,82 @@ export class AccessDoorService {
     return info;
   }
 
-  // ── Device Control Methods ──────────────────────────────────────────
+  // ── Device Control Methods ───────────────────────────────────────
 
-  async getFullDeviceInfo(id: string) {
-    const door = await this.getDoorRecord(id);
-    const info = await this.fallback.getFullDeviceInfo(door.ipAddress);
+  async getFullDeviceInfo(deviceId: string) {
+    const device = await this.getDeviceRecord(deviceId);
+    const info = await this.fallback.getFullDeviceInfo(device.ipAddress!);
     if (!info) return null;
-    if (info.serialNumber && !door.serialNumber) {
-      await this.prisma.accessDoor.update({
-        where: { id },
+    if (info.serialNumber && !device.serialNumber) {
+      await this.prisma.accessDevice.update({
+        where: { id: deviceId },
         data: { serialNumber: info.serialNumber },
       });
     }
     return info;
   }
 
-  async getDeviceTime(id: string) {
-    const ip = await this.getDoorIp(id);
-    return this.fallback.getDeviceTime(ip);
+  async getDeviceTime(deviceId: string) {
+    const device = await this.getDeviceRecord(deviceId);
+    return this.fallback.getDeviceTime(device.ipAddress!);
   }
 
-  async setDeviceTime(id: string) {
-    return this.execAction(id, (ip) => this.fallback.setDeviceTime(ip), 'set device time');
+  async setDeviceTime(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.setDeviceTime(ip), 'set device time');
   }
 
-  async getDoorState(id: string) {
-    const ip = await this.getDoorIp(id);
-    const state = await this.fallback.getDoorState(ip);
+  async getDoorState(deviceId: string) {
+    const device = await this.getDeviceRecord(deviceId);
+    const state = await this.fallback.getDoorState(device.ipAddress!);
     return state ?? { state: -1, label: 'unknown' };
   }
 
-  async unlockDoor(id: string) {
-    return this.execAction(id, (ip) => this.fallback.unlockDoor(ip), 'unlock door');
+  async unlockDoor(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.unlockDoor(ip), 'unlock door');
   }
 
-  async restartDevice(id: string) {
-    const result = await this.execAction(id, (ip) => this.fallback.restartDevice(ip), 'restart device');
-    await this.prisma.accessDoor.update({ where: { id }, data: { state: 3 } }).catch(() => {});
+  async restartDevice(deviceId: string) {
+    const result = await this.execAction(deviceId, (ip) => this.fallback.restartDevice(ip), 'restart device');
+    await this.prisma.accessDevice.update({ where: { id: deviceId }, data: { state: 3 } }).catch(() => {});
     return result;
   }
 
-  async freezeDevice(id: string) {
-    return this.execAction(id, (ip) => this.fallback.freezeDevice(ip), 'freeze device');
+  async freezeDevice(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.freezeDevice(ip), 'freeze device');
   }
 
-  async unfreezeDevice(id: string) {
-    return this.execAction(id, (ip) => this.fallback.unfreezeDevice(ip), 'unfreeze device');
+  async unfreezeDevice(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.unfreezeDevice(ip), 'unfreeze device');
   }
 
-  async testVoice(id: string) {
-    return this.execAction(id, (ip) => this.fallback.testVoice(ip), 'test voice');
+  async testVoice(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.testVoice(ip), 'test voice');
   }
 
-  async cancelAlarm(id: string) {
-    return this.execAction(id, (ip) => this.fallback.cancelAlarm(ip), 'cancel alarm');
+  async cancelAlarm(deviceId: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.cancelAlarm(ip), 'cancel alarm');
   }
 
-  async powerOffDevice(id: string) {
-    const result = await this.execAction(id, (ip) => this.fallback.powerOffDevice(ip), 'power off device');
-    await this.prisma.accessDoor.update({ where: { id }, data: { state: 3 } }).catch(() => {});
+  async powerOffDevice(deviceId: string) {
+    const result = await this.execAction(deviceId, (ip) => this.fallback.powerOffDevice(ip), 'power off device');
+    await this.prisma.accessDevice.update({ where: { id: deviceId }, data: { state: 3 } }).catch(() => {});
     return result;
   }
 
-  async getDeviceOptions(id: string) {
-    const ip = await this.getDoorIp(id);
-    const options = await this.fallback.getDeviceOptions(ip);
+  async getDeviceOptions(deviceId: string) {
+    const device = await this.getDeviceRecord(deviceId);
+    const options = await this.fallback.getDeviceOptions(device.ipAddress!);
     return options ?? '';
   }
 
-  async setDeviceOptions(id: string, data: string) {
-    return this.execAction(id, (ip) => this.fallback.setDeviceOptions(ip, data), 'set device options');
+  async setDeviceOptions(deviceId: string, data: string) {
+    return this.execAction(deviceId, (ip) => this.fallback.setDeviceOptions(ip, data), 'set device options');
   }
 
-  async sniffDoor(id: string): Promise<{ unknownUsers: { uid: number; userId: string; name: string }[]; totalUsers: number; knownUsers: number }> {
-    const door = await this.getDoorRecord(id);
+  async sniffDevice(deviceId: string): Promise<{ unknownUsers: { uid: number; userId: string; name: string }[]; totalUsers: number; knownUsers: number }> {
+    const device = await this.getDeviceRecord(deviceId);
 
-    const deviceUsers = await this.fallback.getDeviceUsers(door.ipAddress);
+    const deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
     if (deviceUsers.length === 0) {
       return { unknownUsers: [], totalUsers: 0, knownUsers: 0 };
     }
@@ -271,8 +298,9 @@ export class AccessDoorService {
     };
   }
 
-  async addSniffedUsers(doorId: string, users: { uid: number; userId: string; name: string }[]): Promise<{ created: number; details: string[] }> {
-    const door = await this.getDoorRecord(doorId);
+  async addSniffedUsers(deviceId: string, users: { uid: number; userId: string; name: string }[]): Promise<{ created: number; details: string[] }> {
+    const device = await this.getDeviceRecord(deviceId);
+    const door = await this.prisma.accessDoor.findUnique({ where: { id: device.doorId } });
     const details: string[] = [];
     let created = 0;
 
@@ -302,18 +330,20 @@ export class AccessDoorService {
           fingerprintStatus: 'enrolled',
           isActive: true,
           lastSyncAt: new Date(),
-          enrollDevice: door.ipAddress,
+          enrollDevice: device.ipAddress,
         },
       });
 
-      // Create permission for source door
-      const existingPerm = await this.prisma.accessPermission.findFirst({
-        where: { personId: newPerson.id, doorId: door.id },
-      });
-      if (!existingPerm) {
-        await this.prisma.accessPermission.create({
-          data: { personId: newPerson.id, doorId: door.id },
+      // Create permission for the door
+      if (door) {
+        const existingPerm = await this.prisma.accessPermission.findFirst({
+          where: { personId: newPerson.id, doorId: door.id },
         });
+        if (!existingPerm) {
+          await this.prisma.accessPermission.create({
+            data: { personId: newPerson.id, doorId: door.id },
+          });
+        }
       }
 
       details.push(`تم إضافة ${user.name} (UID: ${user.uid})`);

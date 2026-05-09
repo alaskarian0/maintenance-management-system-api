@@ -27,25 +27,25 @@ export class AccessSyncScheduler {
 
   @Cron('*/30 * * * * *')
   async pingAllDevices() {
-    const doors = await this.prisma.accessDoor.findMany();
+    const devices = await this.prisma.accessDevice.findMany();
 
-    for (const door of doors) {
-      if (!door.ipAddress) continue;
+    for (const device of devices) {
+      if (!device.ipAddress) continue;
 
       try {
-        const result = await this.fallback.pingDevice(door.ipAddress);
+        const result = await this.fallback.pingDevice(device.ipAddress);
         const newState = result.reachable ? 1 : 3;
 
-        if (door.state !== newState) {
-          await this.prisma.accessDoor.update({
-            where: { id: door.id },
+        if (device.state !== newState) {
+          await this.prisma.accessDevice.update({
+            where: { id: device.id },
             data: {
               state: newState,
               ...(result.reachable ? { lastActivity: new Date() } : {}),
             },
           });
           this.logger.log(
-            `Device "${door.name}" state changed: ${door.state} -> ${newState}`,
+            `Device "${device.name}" state changed: ${device.state} -> ${newState}`,
           );
         }
       } catch {

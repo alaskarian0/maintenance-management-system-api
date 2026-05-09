@@ -11,6 +11,8 @@ import { AccessDoorService } from './access-door.service';
 import { AccessSyncScheduler } from './access-sync.scheduler';
 import { CreateDoorDto } from './dto/create-door.dto';
 import { UpdateDoorDto } from './dto/update-door.dto';
+import { CreateDeviceDto } from './dto/create-device.dto';
+import { UpdateDeviceDto } from './dto/update-device.dto';
 
 @Controller('access-control/doors')
 export class AccessDoorController {
@@ -19,10 +21,14 @@ export class AccessDoorController {
     private readonly syncScheduler: AccessSyncScheduler,
   ) {}
 
+  // ── System Status ────────────────────────────────────────────────
+
   @Get('system-status')
   systemStatus() {
     return this.syncScheduler.status;
   }
+
+  // ── Door CRUD ────────────────────────────────────────────────────
 
   @Get()
   findAll() {
@@ -37,16 +43,6 @@ export class AccessDoorController {
   @Post()
   create(@Body() dto: CreateDoorDto) {
     return this.doorService.create(dto);
-  }
-
-  @Post('sync')
-  async syncDevices() {
-    return this.doorService.pingAllDoors();
-  }
-
-  @Post('discover/:id')
-  discoverInfo(@Param('id') id: string) {
-    return this.doorService.discoverDeviceInfo(id);
   }
 
   @Patch(':id')
@@ -64,17 +60,56 @@ export class AccessDoorController {
     return this.doorService.getDoorPersons(id);
   }
 
+  // ── Device CRUD (nested under doors) ─────────────────────────────
+
+  @Post(':id/devices')
+  createDevice(@Param('id') doorId: string, @Body() dto: CreateDeviceDto) {
+    return this.doorService.createDevice(doorId, dto);
+  }
+
+  @Patch(':id/devices/:deviceId')
+  updateDevice(
+    @Param('id') doorId: string,
+    @Param('deviceId') deviceId: string,
+    @Body() dto: UpdateDeviceDto,
+  ) {
+    return this.doorService.updateDevice(doorId, deviceId, dto);
+  }
+
+  @Delete(':id/devices/:deviceId')
+  removeDevice(
+    @Param('id') doorId: string,
+    @Param('deviceId') deviceId: string,
+  ) {
+    return this.doorService.removeDevice(doorId, deviceId);
+  }
+
+  // ── Sync / Ping ──────────────────────────────────────────────────
+
+  @Post('sync')
+  async syncDevices() {
+    return this.doorService.pingAllDevices();
+  }
+
   @Post('ping')
   pingAll() {
-    return this.doorService.pingAllDoors();
+    return this.doorService.pingAllDevices();
   }
+
+  @Post(':id/discover')
+  discoverInfo(@Param('id') id: string) {
+    return this.doorService.discoverDeviceInfo(id);
+  }
+
+  // ── Per-Device Ping ──────────────────────────────────────────────
 
   @Post(':id/ping')
   pingDoor(@Param('id') id: string) {
-    return this.doorService.pingDoor(id);
+    // Accept either a door ID or device ID — try device first
+    return this.doorService.pingDevice(id);
   }
 
-  // ── Device Control Endpoints ──────────────────────────────────────
+  // ── Device Control Endpoints ─────────────────────────────────────
 
   @Post(':id/full-info')
   getFullDeviceInfo(@Param('id') id: string) {
@@ -143,7 +178,7 @@ export class AccessDoorController {
 
   @Post(':id/sniff')
   sniffDoor(@Param('id') id: string) {
-    return this.doorService.sniffDoor(id);
+    return this.doorService.sniffDevice(id);
   }
 
   @Post(':id/sniff/add')

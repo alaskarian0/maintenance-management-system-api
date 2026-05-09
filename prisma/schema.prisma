@@ -179,7 +179,7 @@ enum MaintenanceStatus {
   RESOLVED
 }
 
-enum DoorGroup {
+enum DeviceSide {
   INSIDE
   OUTSIDE
 }
@@ -289,20 +289,32 @@ model SparePartUsage {
 
 model AccessDoor {
   id           String     @id @default(cuid())
-  zkTerminalId Int?
   name         String
   location     String?
-  group        DoorGroup?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  devices      AccessDevice[]
+  permissions  AccessPermission[]
+  logs         AccessLog[]
+  pendingOps   PendingDeviceOp[]
+}
+
+model AccessDevice {
+  id           String     @id @default(cuid())
+  door         AccessDoor @relation(fields: [doorId], references: [id], onDelete: Cascade)
+  doorId       String
+  name         String
+  side         DeviceSide @default(INSIDE)
   serialNumber String?
   ipAddress    String?
+  zkTerminalId Int?
   state        Int        @default(3)
   lastActivity DateTime?
   isAttendance Boolean    @default(true)
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
-  permissions  AccessPermission[]
-  logs         AccessLog[]
-  pendingOps   PendingDeviceOp[]
+
+  @@index([doorId])
 }
 
 model AccessPerson {
@@ -321,8 +333,8 @@ model AccessPerson {
   faceStatus       String                @default("none")
   enrollDevice     String?
   lastSyncAt       DateTime?
-  fingerprintTemplates Json?              // Stored biometric templates: { fingers: [{ fid, valid, template_base64 }], face: null, pulledFrom, pulledAt }
-  faceTemplates        Json?              // Face template data if available
+  fingerprintTemplates Json?
+  faceTemplates        Json?
   isActive         Boolean               @default(true)
   deletedAt        DateTime?             // Soft delete timestamp
   createdAt        DateTime              @default(now())

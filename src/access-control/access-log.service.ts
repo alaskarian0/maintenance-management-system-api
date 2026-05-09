@@ -62,12 +62,18 @@ export class AccessLogService {
   }
 
   async syncFromDevice(doorId: string): Promise<{ synced: number; skipped: number; total: number }> {
-    const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
-    if (!door?.ipAddress) {
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: doorId },
+      include: { devices: true },
+    });
+
+    // Find a device with IP address under this door
+    const device = door?.devices.find(d => d.ipAddress);
+    if (!device?.ipAddress) {
       return { synced: 0, skipped: 0, total: 0 };
     }
 
-    const logs = await this.fallback.getDeviceAttendanceLogs(door.ipAddress);
+    const logs = await this.fallback.getDeviceAttendanceLogs(device.ipAddress);
     if (logs.length === 0) {
       return { synced: 0, skipped: 0, total: 0 };
     }
@@ -115,18 +121,25 @@ export class AccessLogService {
     const skipped = logs.length - synced;
 
     try {
-      await this.fallback.clearDeviceAttendanceLogs(door.ipAddress);
-      this.logger.log(`Cleared logs on device ${door.ipAddress} after syncing ${synced} records`);
+      await this.fallback.clearDeviceAttendanceLogs(device.ipAddress);
+      this.logger.log(`Cleared logs on device ${device.ipAddress} after syncing ${synced} records`);
     } catch (err) {
-      this.logger.warn(`Failed to clear logs on device ${door.ipAddress}: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(`Failed to clear logs on device ${device.ipAddress}: ${err instanceof Error ? err.message : err}`);
     }
 
     return { synced, skipped, total: logs.length };
   }
 
   async syncAllDevices(): Promise<{ doorId: string; doorName: string; synced: number; skipped: number; total: number; error?: string }[]> {
-    const doors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
-    const activeDoors = doors.filter(d => d.ipAddress);
+    const doors = await this.prisma.accessDoor.findMany({
+      include: { devices: true },
+    });
+
+    // Only sync doors that have at least one online device with an IP
+    const activeDoors = doors.filter(d =>
+      d.devices.some(dev => dev.ipAddress && dev.state === 1)
+    );
+
     const results: { doorId: string; doorName: string; synced: number; skipped: number; total: number; error?: string }[] = [];
 
     const CONCURRENCY = 10;
@@ -178,7 +191,9 @@ export class AccessLogService {
         this.prisma.accessLog.count({
           where: { punchTime: { gte: startOfWeek } },
         }),
-        this.prisma.accessDoor.count({ where: { state: 1 } }),
+        this.prisma.accessDoor.count({
+          where: { devices: { some: { state: 1 } } },
+        }),
         this.prisma.accessDoor.count(),
         this.prisma.accessPerson.count({ where: { isActive: true } }),
       ]);

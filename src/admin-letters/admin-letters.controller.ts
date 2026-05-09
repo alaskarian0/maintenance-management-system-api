@@ -83,10 +83,11 @@ export class AdminLettersController {
       limits: { fileSize: 50 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const ext = path.extname(file.originalname).toLowerCase();
-        if (ext === '.pdf') {
+        const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif'];
+        if (allowed.includes(ext)) {
           cb(null, true);
         } else {
-          cb(new BadRequestException('Only PDF files are allowed'), false);
+          cb(new BadRequestException('Only PDF and image files are allowed (jpg, png, webp, gif)'), false);
         }
       },
     }),
@@ -96,7 +97,7 @@ export class AdminLettersController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     if (!file) {
-      throw new BadRequestException('PDF file is required');
+      throw new BadRequestException('File is required');
     }
     return this.service.create(dto, file);
   }
@@ -121,7 +122,16 @@ export class AdminLettersController {
     if (!letter) throw new NotFoundException('Letter not found');
 
     const fullPath = path.resolve(letter.pdfPath);
-    res.setHeader('Content-Type', 'application/pdf');
+    const ext = path.extname(letter.originalFileName).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+    };
+    res.setHeader('Content-Type', contentTypes[ext] || 'application/octet-stream');
     res.setHeader(
       'Content-Disposition',
       `inline; filename="${encodeURIComponent(letter.originalFileName)}"`,

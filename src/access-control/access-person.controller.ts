@@ -67,14 +67,20 @@ export class AccessPersonController {
     const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
     if (!person) throw new NotFoundException('Person not found');
 
-    const door = await this.prisma.accessDoor.findUnique({ where: { id: targetDoorId } });
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: targetDoorId },
+      include: { devices: true },
+    });
     if (!door) throw new NotFoundException('Target door not found');
-    if (!door.ipAddress) throw new NotFoundException('Target door has no IP address');
 
-    const result = await this.biometricService.transferTemplates(personId, door.ipAddress);
+    const device = door.devices.find(d => d.ipAddress);
+    if (!device?.ipAddress) throw new NotFoundException('Target door has no device with IP address');
+
+    const result = await this.biometricService.transferTemplates(personId, device.ipAddress);
     return {
       person: person.name,
       door: door.name,
+      device: device.name,
       fingersTransferred: result.fingers,
       faceTransferred: result.face,
     };
