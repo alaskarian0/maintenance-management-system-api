@@ -5,6 +5,7 @@ import { AccessDoorController } from './access-door.controller';
 import { AccessDoorService } from './access-door.service';
 import { AccessPersonController } from './access-person.controller';
 import { AccessPersonService } from './access-person.service';
+import { AccessDeviceSyncService } from './access-device-sync.service';
 import { AccessPermissionController } from './access-permission.controller';
 import { AccessPermissionService } from './access-permission.service';
 import { AccessLogController } from './access-log.controller';
@@ -24,6 +25,7 @@ import { AccessBiometricService } from './access-biometric.service';
     AccessFallbackService,
     AccessDoorService,
     AccessPersonService,
+    AccessDeviceSyncService,
     AccessPermissionService,
     AccessLogService,
     AccessSyncScheduler,
