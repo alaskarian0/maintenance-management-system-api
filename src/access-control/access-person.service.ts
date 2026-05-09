@@ -116,7 +116,26 @@ export class AccessPersonService {
       this.prisma.accessPerson.count({ where }),
     ]);
 
-    return { data, total, page: Number(page), limit: Number(limit) };
+    // Batch lookup FingerprintRecord for cross-reference
+    const fingerprints = await this.prisma.fingerprintRecord.findMany({
+      select: { personType: true, personId: true, id: true },
+    });
+    const fpMap = new Map<string, string>();
+    for (const fp of fingerprints) {
+      if (fp.personId != null) {
+        fpMap.set(`${fp.personType}:${fp.personId}`, fp.id);
+      }
+    }
+
+    const enrichedData = data.map((person) => ({
+      ...person,
+      fingerprintRecordId:
+        person.personId != null
+          ? fpMap.get(`${person.personType}:${person.personId}`) ?? null
+          : null,
+    }));
+
+    return { data: enrichedData, total, page: Number(page), limit: Number(limit) };
   }
 
   async findOne(id: string) {

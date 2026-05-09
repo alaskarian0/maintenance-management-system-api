@@ -66,12 +66,48 @@ export class FingerprintsService {
 
   constructor(private prisma: PrismaService) {}
 
-  findAll(personType?: string) {
+  async findAll(personType?: string) {
     const where = personType ? { personType: personType as any } : {};
-    return this.prisma.fingerprintRecord.findMany({
+    const records = await this.prisma.fingerprintRecord.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     });
+
+    const accessPersons = await this.prisma.accessPerson.findMany({
+      where: { deletedAt: null },
+      select: {
+        personType: true,
+        personId: true,
+        id: true,
+        fingerprintStatus: true,
+        isActive: true,
+      },
+    });
+
+    const accessMap = new Map<
+      string,
+      {
+        id: string;
+        fingerprintStatus: string;
+        isActive: boolean;
+      }
+    >();
+    for (const ap of accessPersons) {
+      if (ap.personId)
+        accessMap.set(`${ap.personType}:${ap.personId}`, {
+          id: ap.id,
+          fingerprintStatus: ap.fingerprintStatus,
+          isActive: ap.isActive,
+        });
+    }
+
+    return records.map((r) => ({
+      ...r,
+      accessControl:
+        r.personId != null
+          ? accessMap.get(`${r.personType}:${r.personId}`) ?? null
+          : null,
+    }));
   }
 
   create(dto: CreateFingerprintDto) {
