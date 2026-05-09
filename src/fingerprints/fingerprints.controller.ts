@@ -17,8 +17,13 @@ export class FingerprintsController {
   constructor(private readonly fingerprintsService: FingerprintsService) {}
 
   @Get()
-  findAll(@Query('personType') personType?: string) {
-    return this.fingerprintsService.findAll(personType);
+  findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('personType') personType?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.fingerprintsService.findAll({ page, limit, personType, search });
   }
 
   @Get('employees/search')

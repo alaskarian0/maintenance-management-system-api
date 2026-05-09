@@ -17,12 +17,37 @@ export class FingerprintsService {
     private personSearch: PersonSearchService,
   ) {}
 
-  async findAll(personType?: string) {
-    const where = personType ? { personType: personType as any } : {};
-    const records = await this.prisma.fingerprintRecord.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    });
+  async findAll(query: {
+    page?: string;
+    limit?: string;
+    personType?: string;
+    search?: string;
+  }) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+    if (query.personType) {
+      where.personType = query.personType;
+    }
+    if (query.search) {
+      where.OR = [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { region: { contains: query.search, mode: 'insensitive' } },
+        { note: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [records, total] = await Promise.all([
+      this.prisma.fingerprintRecord.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.fingerprintRecord.count({ where }),
+    ]);
 
     const accessPersons = await this.prisma.accessPerson.findMany({
       where: { deletedAt: null },
@@ -52,13 +77,15 @@ export class FingerprintsService {
         });
     }
 
-    return records.map((r) => ({
+    const data = records.map((r) => ({
       ...r,
       accessControl:
         r.personId != null
           ? accessMap.get(`${r.personType}:${r.personId}`) ?? null
           : null,
     }));
+
+    return { data, total, page, limit };
   }
 
   create(dto: CreateFingerprintDto) {
