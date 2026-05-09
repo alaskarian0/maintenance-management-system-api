@@ -18,10 +18,12 @@ import { MaintenanceRequestsModule } from './maintenance-requests/maintenance-re
 import { SparePartsModule } from './spare-parts/spare-parts.module';
 import { SearchModule } from './search/search.module';
 import { AccessControlModule } from './access-control/access-control.module';
+import { CommonModule } from './common/common.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    CommonModule,
     PrismaModule,
     ActivityLogModule,
     NotificationsModule,

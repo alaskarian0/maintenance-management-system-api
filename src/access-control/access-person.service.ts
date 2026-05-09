@@ -4,73 +4,23 @@ import { PrismaService } from '../prisma.service';
 import { AccessFallbackService, DeviceUserInfo } from './access-fallback.service';
 import { AccessBiometricService } from './access-biometric.service';
 import { QueryPersonDto } from './dto/query-person.dto';
-import * as fs from 'fs';
-import * as path from 'path';
+import {
+  PersonSearchService,
+  EmployeeEntry,
+  ResidentEntry,
+} from '../common/person-search.service';
 
-export interface EmployeeEntry {
-  'تسلسل الموظف': number;
-  'الإسم الرباعي': string;
-  'الهيكلية': string;
-  'الوجبة': string | null;
-}
-
-export interface ResidentEntry {
-  id: number;
-  fullName: string;
-  dateOfBirth: string | null;
-  gender: string | null;
-  phoneNumber: string | null;
-  notes: string;
-  kinship: string;
-  familyId: number;
-  familyAddress: string;
-}
-
-interface EmployeesJson {
-  name: string;
-  headers: string[];
-  data: EmployeeEntry[];
-}
-
-interface FamilyMember {
-  id: number;
-  familyID: number;
-  fullName: string;
-  motherName: string | null;
-  dateOfBirth: string | null;
-  gender: string | null;
-  phoneNumber: string | null;
-  notes: string;
-  kinship: number;
-  kinshipRelation: { id: number; title: string } | null;
-  deletedAt?: string | null;
-}
-
-interface Family {
-  id: number;
-  currentResidentialAddress: string;
-  propertyType: string;
-  status: boolean;
-  familyMembers: FamilyMember[];
-}
-
-interface FamiliesResponse {
-  status: string;
-  totalFamilies: number;
-  data: Family[];
-}
+export { EmployeeEntry, ResidentEntry };
 
 @Injectable()
 export class AccessPersonService {
   private readonly logger = new Logger(AccessPersonService.name);
-  private residentsCache: ResidentEntry[] | null = null;
-  private residentsCacheAt = 0;
-  private readonly CACHE_TTL = 5 * 60 * 1000;
 
   constructor(
     private prisma: PrismaService,
     private fallback: AccessFallbackService,
     private biometric: AccessBiometricService,
+    private personSearch: PersonSearchService,
   ) {}
 
   async findAll(query: QueryPersonDto) {
@@ -658,6 +608,9 @@ export class AccessPersonService {
 
     details.push(`تم العثور على ${deviceUsers.length} مستخدم على جهاز ${door.name} (${door.ipAddress})`);
 
+    const allDoors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
+    const otherDoors = allDoors.filter(d => d.id !== door.id && d.ipAddress);
+
     for (const deviceUser of deviceUsers) {
       const existingPerson = await this.prisma.accessPerson.findFirst({
         where: {
@@ -669,7 +622,7 @@ export class AccessPersonService {
         },
       });
 
-      let personId: string;
+      let person: { id: string; personId: number | null; empCode: string | null; name: string; isActive: boolean };
 
       if (!existingPerson) {
         const newPerson = await this.prisma.accessPerson.create({
@@ -683,12 +636,12 @@ export class AccessPersonService {
             lastSyncAt: new Date(),
           },
         });
-        personId = newPerson.id;
+        person = newPerson;
         details.push(`جديد: ${deviceUser.name} (UID: ${deviceUser.uid})`);
         created++;
       } else {
         const nameChanged = deviceUser.name && deviceUser.name !== existingPerson.name;
-        await this.prisma.accessPerson.update({
+        const updatedPerson = await this.prisma.accessPerson.update({
           where: { id: existingPerson.id },
           data: {
             ...(nameChanged ? { name: deviceUser.name } : {}),
@@ -696,64 +649,35 @@ export class AccessPersonService {
             lastSyncAt: new Date(),
           },
         });
-        personId = existingPerson.id;
+        person = updatedPerson;
         details.push(`محدّث: ${deviceUser.name || existingPerson.name} (UID: ${deviceUser.uid})${nameChanged ? ' — تم تغيير الاسم' : ''}`);
         updated++;
       }
 
-      // Create permission for source door if not exists
       const existingPerm = await this.prisma.accessPermission.findFirst({
-        where: { personId, doorId: door.id },
+        where: { personId: person.id, doorId: door.id },
       });
       if (!existingPerm) {
         await this.prisma.accessPermission.create({
-          data: { personId, doorId: door.id },
+          data: { personId: person.id, doorId: door.id },
         });
       }
-    }
 
-    // Pull biometric templates for all synced users (best-effort, in background)
-    for (const deviceUser of deviceUsers) {
-      const person = await this.prisma.accessPerson.findFirst({
-        where: {
-          deletedAt: null,
-          OR: [
-            { personId: deviceUser.uid },
-            { name: deviceUser.name },
-          ],
-        },
-      });
-      if (person) {
-        try {
-          await this.biometric.pullAndStoreTemplates(person.id, door.ipAddress!);
-        } catch (err) {
-          this.logger.warn(`Failed to pull templates for "${person.name}" from ${door.name}: ${err instanceof Error ? err.message : err}`);
-        }
+      try {
+        await this.biometric.pullAndStoreTemplates(person.id, door.ipAddress!);
+      } catch (err) {
+        this.logger.warn(`Failed to pull templates for "${person.name}" from ${door.name}: ${err instanceof Error ? err.message : err}`);
       }
-    }
 
-    // Push newly created active persons to their other permitted doors
-    const allDoors = await this.prisma.accessDoor.findMany({ where: { state: 1 } });
-    const otherDoors = allDoors.filter(d => d.id !== door.id && d.ipAddress);
-
-    if (otherDoors.length > 0) {
-      for (const deviceUser of deviceUsers) {
-        const person = await this.prisma.accessPerson.findFirst({
-          where: {
-            deletedAt: null,
-            OR: [
-              { personId: deviceUser.uid },
-              { name: deviceUser.name },
-            ],
-          },
-          include: { permissions: { include: { door: true } } },
+      if (otherDoors.length > 0 && person.isActive) {
+        const permissions = await this.prisma.accessPermission.findMany({
+          where: { personId: person.id },
+          include: { door: true },
         });
-        if (!person || !person.isActive) continue;
-
         const uid = person.personId || 0;
         const empCode = person.empCode || String(uid);
 
-        const permittedOtherDoors = person.permissions
+        const permittedOtherDoors = permissions
           .map(p => p.door)
           .filter(d => d?.ipAddress && d.id !== door.id && d.state === 1);
 
@@ -774,89 +698,10 @@ export class AccessPersonService {
   }
 
   searchEmployees(query: string): EmployeeEntry[] {
-    const jsonPath = path.join(
-      process.cwd(),
-      'prisma',
-      'data',
-      'employes2.json',
-    );
-    const raw = fs.readFileSync(jsonPath, 'utf8');
-    const doc = JSON.parse(raw) as EmployeesJson;
-
-    if (!query || query.trim().length < 1) {
-      return doc.data;
-    }
-
-    const q = query.trim().toLowerCase();
-    return doc.data.filter((emp) => {
-      const name = emp['الإسم الرباعي']?.toLowerCase() || '';
-      const id = String(emp['تسلسل الموظف'] || '');
-      return name.includes(q) || id.includes(q);
-    });
+    return this.personSearch.searchEmployees(query);
   }
 
   async searchResidents(query: string): Promise<ResidentEntry[]> {
-    const residents = await this.getResidents();
-
-    if (!query || query.trim().length < 1) {
-      return residents;
-    }
-
-    const q = query.trim().toLowerCase();
-    return residents.filter((r) => {
-      const name = r.fullName?.toLowerCase() || '';
-      const id = String(r.id);
-      const phone = r.phoneNumber?.toLowerCase() || '';
-      return name.includes(q) || id.includes(q) || phone.includes(q);
-    });
-  }
-
-  private async getResidents(): Promise<ResidentEntry[]> {
-    const now = Date.now();
-    if (this.residentsCache && now - this.residentsCacheAt < this.CACHE_TTL) {
-      return this.residentsCache;
-    }
-
-    const apiUrl = process.env.RESIDENTS_API_URL;
-    const apiKey = process.env.RESIDENTS_API_KEY;
-
-    if (!apiUrl || !apiKey) {
-      return this.residentsCache ?? [];
-    }
-
-    try {
-      const res = await fetch(apiUrl, {
-        headers: { 'X-API-Key': apiKey },
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (!res.ok) return this.residentsCache ?? [];
-
-      const json = (await res.json()) as FamiliesResponse;
-      const residents: ResidentEntry[] = [];
-
-      for (const family of json.data) {
-        for (const member of family.familyMembers) {
-          if (member.deletedAt) continue;
-          residents.push({
-            id: member.id,
-            fullName: member.fullName || '',
-            dateOfBirth: member.dateOfBirth,
-            gender: member.gender,
-            phoneNumber: member.phoneNumber,
-            notes: member.notes || '',
-            kinship: member.kinshipRelation?.title || '',
-            familyId: family.id,
-            familyAddress: family.currentResidentialAddress || '',
-          });
-        }
-      }
-
-      this.residentsCache = residents;
-      this.residentsCacheAt = now;
-      return residents;
-    } catch {
-      return this.residentsCache ?? [];
-    }
+    return this.personSearch.searchResidents(query);
   }
 }

@@ -51,6 +51,7 @@ export class AccessDoorService {
   async create(data: {
     name: string;
     location?: string;
+    group?: 'INSIDE' | 'OUTSIDE';
     serialNumber?: string;
     ipAddress?: string;
     zkTerminalId?: number;
@@ -60,7 +61,7 @@ export class AccessDoorService {
 
   async update(
     id: string,
-    data: { name?: string; location?: string; isAttendance?: boolean },
+    data: { name?: string; location?: string; group?: 'INSIDE' | 'OUTSIDE'; isAttendance?: boolean },
   ) {
     return this.prisma.accessDoor.update({ where: { id }, data });
   }
@@ -237,5 +238,88 @@ export class AccessDoorService {
 
   async setDeviceOptions(id: string, data: string) {
     return this.execAction(id, (ip) => this.fallback.setDeviceOptions(ip, data), 'set device options');
+  }
+
+  async sniffDoor(id: string): Promise<{ unknownUsers: { uid: number; userId: string; name: string }[]; totalUsers: number; knownUsers: number }> {
+    const door = await this.getDoorRecord(id);
+
+    const deviceUsers = await this.fallback.getDeviceUsers(door.ipAddress);
+    if (deviceUsers.length === 0) {
+      return { unknownUsers: [], totalUsers: 0, knownUsers: 0 };
+    }
+
+    const knownPersons = await this.prisma.accessPerson.findMany({
+      where: { deletedAt: null },
+      select: { personId: true, empCode: true, name: true },
+    });
+
+    const knownUidSet = new Set(knownPersons.filter(p => p.personId != null).map(p => p.personId));
+    const knownEmpCodeSet = new Set(knownPersons.filter(p => p.empCode).map(p => p.empCode!.toLowerCase()));
+    const knownNameSet = new Set(knownPersons.filter(p => p.name).map(p => p.name.toLowerCase()));
+
+    const unknownUsers = deviceUsers.filter(u => {
+      const uidMatch = knownUidSet.has(u.uid);
+      const empCodeMatch = u.userId && knownEmpCodeSet.has(u.userId.toLowerCase());
+      const nameMatch = u.name && knownNameSet.has(u.name.toLowerCase());
+      return !uidMatch && !empCodeMatch && !nameMatch;
+    });
+
+    return {
+      unknownUsers: unknownUsers.map(u => ({ uid: u.uid, userId: u.userId, name: u.name })),
+      totalUsers: deviceUsers.length,
+      knownUsers: deviceUsers.length - unknownUsers.length,
+    };
+  }
+
+  async addSniffedUsers(doorId: string, users: { uid: number; userId: string; name: string }[]): Promise<{ created: number; details: string[] }> {
+    const door = await this.getDoorRecord(doorId);
+    const details: string[] = [];
+    let created = 0;
+
+    for (const user of users) {
+      const existingPerson = await this.prisma.accessPerson.findFirst({
+        where: {
+          deletedAt: null,
+          OR: [
+            { personId: user.uid },
+            { empCode: user.userId },
+            { name: user.name },
+          ],
+        },
+      });
+
+      if (existingPerson) {
+        details.push(`تم تجاهل ${user.name} — موجود مسبقاً`);
+        continue;
+      }
+
+      const newPerson = await this.prisma.accessPerson.create({
+        data: {
+          personType: 'EMPLOYEE',
+          name: user.name || `User ${user.uid}`,
+          personId: user.uid,
+          empCode: user.userId || String(user.uid),
+          fingerprintStatus: 'enrolled',
+          isActive: true,
+          lastSyncAt: new Date(),
+          enrollDevice: door.ipAddress,
+        },
+      });
+
+      // Create permission for source door
+      const existingPerm = await this.prisma.accessPermission.findFirst({
+        where: { personId: newPerson.id, doorId: door.id },
+      });
+      if (!existingPerm) {
+        await this.prisma.accessPermission.create({
+          data: { personId: newPerson.id, doorId: door.id },
+        });
+      }
+
+      details.push(`تم إضافة ${user.name} (UID: ${user.uid})`);
+      created++;
+    }
+
+    return { created, details };
   }
 }

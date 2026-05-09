@@ -140,4 +140,14 @@ export class AccessDoorController {
   setDeviceOptions(@Param('id') id: string, @Body() body: { data?: string }) {
     return this.doorService.setDeviceOptions(id, body?.data ?? '');
   }
+
+  @Post(':id/sniff')
+  sniffDoor(@Param('id') id: string) {
+    return this.doorService.sniffDoor(id);
+  }
+
+  @Post(':id/sniff/add')
+  addSniffedUsers(@Param('id') id: string, @Body() body: { users: { uid: number; userId: string; name: string }[] }) {
+    return this.doorService.addSniffedUsers(id, body.users);
+  }
 }

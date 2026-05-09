@@ -179,6 +179,11 @@ enum MaintenanceStatus {
   RESOLVED
 }
 
+enum DoorGroup {
+  INSIDE
+  OUTSIDE
+}
+
 enum FingerprintPersonType {
   EMPLOYEE
   RESIDENT
@@ -283,17 +288,18 @@ model SparePartUsage {
 }
 
 model AccessDoor {
-  id           String   @id @default(cuid())
+  id           String     @id @default(cuid())
   zkTerminalId Int?
   name         String
   location     String?
+  group        DoorGroup?
   serialNumber String?
   ipAddress    String?
-  state        Int      @default(3)
+  state        Int        @default(3)
   lastActivity DateTime?
-  isAttendance Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isAttendance Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
   permissions  AccessPermission[]
   logs         AccessLog[]
   pendingOps   PendingDeviceOp[]
