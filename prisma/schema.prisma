@@ -315,6 +315,8 @@ model AccessPerson {
   region           String?
   note             String?
   phone            String?
+  accessType       String                @default("permanent")
+  accessEndDate    DateTime?
   fingerprintStatus String                @default("none")
   faceStatus       String                @default("none")
   enrollDevice     String?
@@ -379,4 +381,33 @@ model PendingDeviceOp {
   door        AccessDoor   @relation(fields: [doorId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+}
+
+model AdminLetter {
+  id               String              @id @default(cuid())
+  title            String
+  referenceNumber  String?
+  letterDate       DateTime
+  pdfPath          String
+  originalFileName String
+  notes            String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  persons          AdminLetterPerson[]
+
+  @@index([letterDate(sort: Desc)])
+}
+
+model AdminLetterPerson {
+  id         String                @id @default(cuid())
+  letter     AdminLetter           @relation(fields: [letterId], references: [id], onDelete: Cascade)
+  letterId   String
+  personType FingerprintPersonType @default(EMPLOYEE)
+  personName String
+  personId   Int?
+  note       String?
+  createdAt  DateTime              @default(now())
+
+  @@index([letterId])
+  @@index([personType, personId])
 }

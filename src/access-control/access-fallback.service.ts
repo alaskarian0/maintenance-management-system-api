@@ -202,19 +202,36 @@ export class AccessFallbackService {
   async getDeviceAttendanceLogs(ip: string): Promise<DeviceAttendanceRecord[]> {
     try {
       const ZKAttendanceClient = require('zk-attendance-sdk');
-      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
-      await client.createSocket();
-      const result = await client.getAttendances();
-      await client.disconnect();
+      const utils = require('zk-attendance-sdk/src/helper/utils');
 
-      const logs = result?.data || [];
-      return logs.map((log: any) => ({
-        deviceUserId: log.deviceUserId || log.userSn || 0,
-        deviceSerialNumber: null,
-        timestamp: log.recordTime ? new Date(log.recordTime) : (log.attTime ? new Date(log.attTime) : new Date()),
-        state: log.state || 0,
-        verifyType: log.verifyMethod ?? log.verifyType ?? 0,
-      }));
+      const origDecode = utils.decodeRecordData40;
+      utils.decodeRecordData40 = (recordData: Buffer) => {
+        const record = origDecode(recordData);
+        // ZK 40-byte record: byte 31 = verifyType, byte 32 = in/out state
+        if (recordData.length >= 32) {
+          record.verifyType = recordData.readUIntLE(31, 1);
+          record.state = recordData.readUIntLE(32, 1);
+        }
+        return record;
+      };
+
+      try {
+        const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+        await client.createSocket();
+        const result = await client.getAttendances();
+        await client.disconnect();
+
+        const logs = result?.data || [];
+        return logs.map((log: any) => ({
+          deviceUserId: log.deviceUserId || log.userSn || 0,
+          deviceSerialNumber: null,
+          timestamp: log.recordTime ? new Date(log.recordTime) : (log.attTime ? new Date(log.attTime) : new Date()),
+          state: log.state ?? 0,
+          verifyType: log.verifyType ?? 0,
+        }));
+      } finally {
+        utils.decodeRecordData40 = origDecode;
+      }
     } catch (err) {
       this.logger.warn(`Failed to get attendance logs from ${ip}: ${this.errMsg(err)}`);
       return [];

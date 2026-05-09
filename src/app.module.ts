@@ -18,6 +18,7 @@ import { MaintenanceRequestsModule } from './maintenance-requests/maintenance-re
 import { SparePartsModule } from './spare-parts/spare-parts.module';
 import { SearchModule } from './search/search.module';
 import { AccessControlModule } from './access-control/access-control.module';
+import { AdminLettersModule } from './admin-letters/admin-letters.module';
 import { CommonModule } from './common/common.module';
 
 @Module({
@@ -42,6 +43,7 @@ import { CommonModule } from './common/common.module';
     ReportsModule,
     SearchModule,
     AccessControlModule,
+    AdminLettersModule,
   ],
 })
 export class AppModule {}

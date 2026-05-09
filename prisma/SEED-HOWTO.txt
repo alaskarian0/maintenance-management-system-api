@@ -1,32 +1,55 @@
-Seed fills demo data and org tree from prisma/data/employes2-unique-hierarchy.json.
-It FIRST deletes: maintenance records, devices, units, divisions, departments, categories, links.
+Seed fills core data (admin, users, departments, links) and optionally demo data
+(devices, device types, maintenance records).
+
+Seed is split into two parts:
+  1. CORE  (always runs) — admin, baseline users, departments/divisions/units, links
+  2. DEMO  (opt-in)      — device types, categories, devices, item assignments, maintenance records
+
+Both parts are destructive: they delete existing rows in their scope before re-inserting.
 
 When to run
-  Only when you intend to reset that data (e.g. local dev refresh).
+  Only when you intend to reset that data (e.g. local dev refresh, fresh environment).
 
 How to run (from maintenance-management-system-api)
-  npm run db:seed
-  or: npx prisma db seed
 
-Run app with seed (Windows cmd / npm scripts)
-  npm run start:dev:seed
+  Core only (admin, users, departments, links):
+    npm run db:seed
+    or: npx prisma db seed
+
+  Core + Demo (adds devices, device types, maintenance records):
+    npm run db:seed:demo
+    or: set SEED_DEMO=1 && npx prisma db seed
+
+  PowerShell:
+    $env:SEED_DEMO="1"; npx prisma db seed
+
+  Run app with seed (Windows cmd / npm scripts):
+    npm run start:dev:seed
 
 Interactive
   You will be asked to type YES before anything is deleted.
 
 Non-interactive (scripts, CI, migrate reset without TTY)
-  PowerShell:  $env:SEED_CONFIRM="yes"; npx prisma db seed
-  cmd:         set SEED_CONFIRM=yes && npx prisma db seed
-  Unix:        SEED_CONFIRM=yes npx prisma db seed
+  Core only:
+    PowerShell:  $env:SEED_CONFIRM="yes"; npx prisma db seed
+    cmd:         set SEED_CONFIRM=yes && npx prisma db seed
+    Unix:        SEED_CONFIRM=yes npx prisma db seed
+
+  Core + Demo:
+    PowerShell:  $env:SEED_CONFIRM="yes"; $env:SEED_DEMO="1"; npx prisma db seed
+    cmd:         set SEED_CONFIRM=yes && set SEED_DEMO=1 && npx prisma db seed
+    Unix:        SEED_CONFIRM=yes SEED_DEMO=1 npx prisma db seed
 
 Optional environment variables
+  SEED_CONFIRM=yes                   Skip the YES prompt (required in non-interactive mode).
+  SEED_DEMO=1                        Include demo data (devices, device types, maintenance records).
   SEED_INCLUDE_INACTIVE_HIERARCHY=1  Include "( المنقطعين عن العمل )" org paths from JSON.
   ADMIN_INITIAL_PASSWORD             Used only if no Admin row exists yet.
   USER_INITIAL_PASSWORD              Used for seeded users (including "منتسبين").
-  SEED_CONFIRM=yes                   Skip the YES prompt (required in non-interactive mode).
 
 Files
-  prisma/seed.ts              Main script
+  prisma/seed.ts              Main entry point (orchestrates core + demo)
+  prisma/seed-core.ts         Core seed (admin, users, departments, links)
+  prisma/seed-demo.ts         Demo seed (devices, device types, maintenance records)
   prisma/seedGuard.ts         Confirmation gate
-  prisma/hierarchyFromJson.ts Org import from JSON
-  prisma/data/employes2-unique-hierarchy.json  Source data
+  prisma/hierarchyFromJson.ts Org import from external API (with fallback)

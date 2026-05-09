@@ -105,21 +105,32 @@ export class AccessPersonService {
     region?: string;
     note?: string;
     phone?: string;
+    accessType?: 'permanent' | 'temporary';
+    accessEndDate?: string;
   }) {
-    return this.prisma.accessPerson.create({ data });
+    const createData: any = { ...data };
+    if (data.accessEndDate) {
+      createData.accessEndDate = new Date(data.accessEndDate);
+    }
+    return this.prisma.accessPerson.create({ data: createData });
   }
 
   async update(
     id: string,
-    data: { name?: string; empCode?: string; region?: string; note?: string; phone?: string; isActive?: boolean },
+    data: { name?: string; empCode?: string; region?: string; note?: string; phone?: string; isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string },
   ) {
     const person = await this.prisma.accessPerson.findUnique({ where: { id } });
     if (!person) throw new NotFoundException('Person not found');
 
+    const updateData: any = { ...data };
+    if (data.accessEndDate !== undefined) {
+      updateData.accessEndDate = data.accessEndDate ? new Date(data.accessEndDate) : null;
+    }
+
     const wasActive = person.isActive;
     const willBeActive = data.isActive ?? wasActive;
 
-    const updated = await this.prisma.accessPerson.update({ where: { id }, data });
+    const updated = await this.prisma.accessPerson.update({ where: { id }, data: updateData });
 
     const activeStatusChanged = wasActive !== willBeActive;
     const dataChanged = willBeActive && (data.name || data.empCode);
@@ -695,6 +706,37 @@ export class AccessPersonService {
     }
 
     return { synced: deviceUsers.length, created, updated, details };
+  }
+
+  async expireTemporaryAccess(): Promise<{ expired: number }> {
+    const now = new Date();
+    const expiredPersons = await this.prisma.accessPerson.findMany({
+      where: {
+        accessType: 'temporary',
+        accessEndDate: { lte: now },
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    if (expiredPersons.length === 0) return { expired: 0 };
+
+    this.logger.log(`Expiring ${expiredPersons.length} temporary access persons`);
+
+    for (const person of expiredPersons) {
+      try {
+        await this.prisma.accessPerson.update({
+          where: { id: person.id },
+          data: { isActive: false },
+        });
+        await this.removeFromAllDevices(person);
+        this.logger.log(`Expired temporary access for "${person.name}" (ended ${person.accessEndDate?.toISOString() ?? 'unknown'})`);
+      } catch (err) {
+        this.logger.warn(`Failed to expire "${person.name}": ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    return { expired: expiredPersons.length };
   }
 
   searchEmployees(query: string): EmployeeEntry[] {

@@ -106,6 +106,16 @@ export class AccessSyncScheduler {
       } catch (err) {
         this.logger.warn(`Pending ops cleanup failed: ${err instanceof Error ? err.message : err}`);
       }
+
+      // 4. Expire temporary access
+      try {
+        const expiryResult = await this.personService.expireTemporaryAccess();
+        if (expiryResult.expired > 0) {
+          this.logger.log(`Expired ${expiryResult.expired} temporary access persons`);
+        }
+      } catch (err) {
+        this.logger.warn(`Temporary access expiry failed: ${err instanceof Error ? err.message : err}`);
+      }
     } catch (err) {
       this.logger.error(`Auto-sync error: ${err instanceof Error ? err.message : err}`);
     } finally {

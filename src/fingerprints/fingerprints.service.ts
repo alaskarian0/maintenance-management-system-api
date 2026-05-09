@@ -77,12 +77,39 @@ export class FingerprintsService {
         });
     }
 
+    // Fetch letter counts for all persons in the result set
+    const personsWithId = records.filter((r) => r.personId != null);
+    const letterCountMap = new Map<string, number>();
+
+    if (personsWithId.length > 0) {
+      const personConditions = personsWithId.map((r) => ({
+        personType: r.personType,
+        personId: r.personId!,
+      }));
+
+      const letterCounts = await this.prisma.adminLetterPerson.groupBy({
+        by: ['personType', 'personId'],
+        where: {
+          OR: personConditions,
+        },
+        _count: { id: true },
+      });
+
+      for (const lc of letterCounts) {
+        letterCountMap.set(`${lc.personType}:${lc.personId}`, lc._count.id);
+      }
+    }
+
     const data = records.map((r) => ({
       ...r,
       accessControl:
         r.personId != null
           ? accessMap.get(`${r.personType}:${r.personId}`) ?? null
           : null,
+      lettersCount:
+        r.personId != null
+          ? letterCountMap.get(`${r.personType}:${r.personId}`) ?? 0
+          : 0,
     }));
 
     return { data, total, page, limit };

@@ -5,4 +5,6 @@ export class UpdatePersonDto {
   note?: string;
   phone?: string;
   isActive?: boolean;
+  accessType?: 'permanent' | 'temporary';
+  accessEndDate?: string;
 }

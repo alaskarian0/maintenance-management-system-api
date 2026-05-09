@@ -6,4 +6,6 @@ export class CreatePersonDto {
   region?: string;
   note?: string;
   phone?: string;
+  accessType?: 'permanent' | 'temporary';
+  accessEndDate?: string;
 }
