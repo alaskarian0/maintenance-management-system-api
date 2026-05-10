@@ -21,6 +21,7 @@ import { AccessBiometricService } from './access-biometric.service';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { UpdatePersonDto } from './dto/update-person.dto';
 import { QueryPersonDto } from './dto/query-person.dto';
+import { EnrollFingerprintDto } from './dto/enroll-fingerprint.dto';
 import { PrismaService } from '../prisma.service';
 
 @Controller('access-control/persons')
@@ -143,6 +144,21 @@ export class AccessPersonController {
     @Param('doorId') doorId: string,
   ) {
     return this.personService.pushPersonToDevice(personId, doorId);
+  }
+
+  @Post(':id/enroll-fingerprint')
+  async enrollFingerprint(
+    @Param('id') personId: string,
+    @Body() dto: EnrollFingerprintDto,
+  ) {
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const device = await this.prisma.accessDevice.findUnique({ where: { id: dto.deviceId } });
+    if (!device) throw new NotFoundException('Device not found');
+    if (!device.ipAddress) throw new NotFoundException('Device has no IP address configured');
+
+    return this.biometricService.enrollFingerprint(personId, device.ipAddress, dto.fingerIndex);
   }
 
   @Post()

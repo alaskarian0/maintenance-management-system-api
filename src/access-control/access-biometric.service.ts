@@ -214,4 +214,119 @@ export class AccessBiometricService {
     if (!person) return null;
     return (person.fingerprintTemplates as unknown as StoredTemplates) ?? null;
   }
+
+  async enrollFingerprint(personId: string, deviceIp: string, fingerIndex: number): Promise<{ success: boolean; fingerIndex: number; message: string }> {
+    if (fingerIndex < 0 || fingerIndex > 9) {
+      return { success: false, fingerIndex, message: 'فهرس الإصبع خارج النطاق (0-9)' };
+    }
+
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new Error('Person not found');
+
+    const userId = String(person.empCode || person.personId || '');
+    if (!userId) {
+      return { success: false, fingerIndex, message: 'الشخص ليس لديه رقم موظف أو UID' };
+    }
+
+    const Zklib = require('zklib-ts/dist/index.cjs.js');
+    const zk = new Zklib(deviceIp, 4370, 5000, 10000);
+
+    try {
+      await zk.createSocket();
+    } catch (err) {
+      const msg = `لا يمكن الاتصال بالجهاز ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`;
+      this.logger.warn(msg);
+      return { success: false, fingerIndex, message: msg };
+    }
+
+    try {
+      // Load user cache from device
+      try {
+        await zk.getUsers();
+        this.logger.log(`Loaded user cache from ${deviceIp} for enrollment`);
+      } catch {
+        this.logger.warn(`Failed to load users from ${deviceIp}, continuing anyway`);
+      }
+
+      // Ensure user exists on device
+      try {
+        await zk.setUser(userId, person.name.substring(0, 24), '', 0, 0);
+        this.logger.log(`Ensured user "${person.name}" (${userId}) exists on ${deviceIp}`);
+      } catch (err) {
+        this.logger.warn(`setUser failed for "${person.name}" on ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+        try { await zk.getUsers(); } catch { /* refresh cache */ }
+      }
+
+      // Start enrollment - device will show "place your finger"
+      this.logger.log(`Starting fingerprint enrollment for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
+      const enrolled = await zk.enrollUser(userId, fingerIndex);
+
+      if (!enrolled) {
+        this.logger.warn(`Fingerprint enrollment failed for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
+        return { success: false, fingerIndex, message: 'فشل تسجيل البصمة — لم يتم التحقق من الإصبع بشكل كافٍ. حاول مرة أخرى.' };
+      }
+
+      this.logger.log(`Fingerprint enrolled successfully for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
+
+      // Pull the newly enrolled template from the device
+      let templateBase64: string | null = null;
+      try {
+        const templateBuffer = await zk.getUserTemplate(userId, fingerIndex);
+        if (templateBuffer && templateBuffer.length > 0) {
+          templateBase64 = templateBuffer.toString('base64');
+          this.logger.log(`Pulled enrolled template for finger ${fingerIndex} (${templateBuffer.length} bytes)`);
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to pull enrolled template for finger ${fingerIndex}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+      }
+
+      // Update stored templates in DB
+      const existing = person.fingerprintTemplates as unknown as StoredTemplates | null;
+      const existingFingers = existing?.fingers || [];
+      const filteredFingers = existingFingers.filter(f => f.fid !== fingerIndex);
+
+      if (templateBase64) {
+        filteredFingers.push({
+          fid: fingerIndex,
+          valid: 1,
+          template_base64: templateBase64,
+        });
+      }
+
+      const storedData: StoredTemplates = {
+        fingers: filteredFingers,
+        face: existing?.face || null,
+        pulledFrom: deviceIp,
+        pulledAt: new Date().toISOString(),
+      };
+
+      await this.prisma.accessPerson.update({
+        where: { id: personId },
+        data: {
+          fingerprintTemplates: storedData as any,
+          fingerprintStatus: 'enrolled',
+          enrollDevice: deviceIp,
+          lastSyncAt: new Date(),
+        },
+      });
+
+      this.logger.log(`Saved enrolled fingerprint to DB for "${person.name}" (finger ${fingerIndex})`);
+
+      return {
+        success: true,
+        fingerIndex,
+        message: `تم تسجيل البصمة بنجاح — الإصبع ${fingerIndex}${templateBase64 ? '' : ' (لم يتم حفظ النموذج محلياً)'}`,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      this.logger.error(`Enrollment error for "${person.name}" on ${deviceIp}: ${msg}`);
+      return { success: false, fingerIndex, message: `خطأ أثناء التسجيل: ${msg}` };
+    } finally {
+      try {
+        await zk.disconnect();
+      } catch {
+        // Ignore
+      }
+    }
+  }
 }
