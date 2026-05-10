@@ -8,7 +8,14 @@ import {
   Body,
   Query,
   NotFoundException,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
 import { AccessPersonService } from './access-person.service';
 import { AccessBiometricService } from './access-biometric.service';
 import { CreatePersonDto } from './dto/create-person.dto';
@@ -52,6 +59,50 @@ export class AccessPersonController {
   @Post('sync-from-device/:doorId')
   syncFromDevice(@Param('doorId') doorId: string) {
     return this.personService.syncFromDevice(doorId);
+  }
+
+  @Post(':id/photo')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const uploadDir = join(process.cwd(), 'uploads', 'persons');
+          if (!existsSync(uploadDir)) {
+            mkdirSync(uploadDir, { recursive: true });
+          }
+          cb(null, uploadDir);
+        },
+        filename: (_req, file, cb) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, uniqueSuffix + extname(file.originalname));
+        },
+      }),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) {
+          cb(new BadRequestException('Only image files are allowed'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async uploadPhoto(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const person = await this.prisma.accessPerson.findUnique({ where: { id } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const photoUrl = `/uploads/persons/${file.filename}`;
+    await this.prisma.accessPerson.update({
+      where: { id },
+      data: { photoUrl },
+    });
+
+    return { photoUrl };
   }
 
   @Get(':id')

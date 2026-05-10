@@ -61,6 +61,14 @@ export class AccessPersonService {
         orderBy: { createdAt: 'desc' },
         include: {
           _count: { select: { permissions: true } },
+          permissions: {
+            select: {
+              doorId: true,
+              door: { select: { id: true, name: true } },
+            },
+          },
+          department: { select: { id: true, name: true } },
+          unit: { select: { id: true, name: true } },
         },
         skip,
         take: Number(limit),
@@ -109,17 +117,36 @@ export class AccessPersonService {
     phone?: string;
     accessType?: 'permanent' | 'temporary';
     accessEndDate?: string;
+    birthDate?: string;
+    courtNumber?: string;
+    departmentId?: string;
+    unitId?: string;
+    address?: string;
+    hireDate?: string;
+    role?: 'user' | 'admin';
+    photoUrl?: string;
   }) {
     const createData: any = { ...data };
     if (data.accessEndDate) {
       createData.accessEndDate = new Date(data.accessEndDate);
+    }
+    if (data.birthDate) {
+      createData.birthDate = new Date(data.birthDate);
+    }
+    if (data.hireDate) {
+      createData.hireDate = new Date(data.hireDate);
     }
     return this.prisma.accessPerson.create({ data: createData });
   }
 
   async update(
     id: string,
-    data: { name?: string; empCode?: string; region?: string; note?: string; phone?: string; isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string },
+    data: {
+      name?: string; empCode?: string; region?: string; note?: string; phone?: string;
+      isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string;
+      birthDate?: string; courtNumber?: string; departmentId?: string; unitId?: string;
+      address?: string; hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string;
+    },
   ) {
     const person = await this.prisma.accessPerson.findUnique({ where: { id } });
     if (!person) throw new NotFoundException('Person not found');
@@ -127,6 +154,18 @@ export class AccessPersonService {
     const updateData: any = { ...data };
     if (data.accessEndDate !== undefined) {
       updateData.accessEndDate = data.accessEndDate ? new Date(data.accessEndDate) : null;
+    }
+    if (data.birthDate !== undefined) {
+      updateData.birthDate = data.birthDate ? new Date(data.birthDate) : null;
+    }
+    if (data.hireDate !== undefined) {
+      updateData.hireDate = data.hireDate ? new Date(data.hireDate) : null;
+    }
+    if (data.departmentId !== undefined) {
+      updateData.departmentId = data.departmentId || null;
+    }
+    if (data.unitId !== undefined) {
+      updateData.unitId = data.unitId || null;
     }
 
     const wasActive = person.isActive;
