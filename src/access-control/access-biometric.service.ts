@@ -229,7 +229,8 @@ export class AccessBiometricService {
     }
 
     const Zklib = require('zklib-ts/dist/index.cjs.js');
-    const zk = new Zklib(deviceIp, 4370, 5000, 10000);
+    // 90s timeout — enrollment requires placing finger 3 times on device
+    const zk = new Zklib(deviceIp, 4370, 90000, 10000);
 
     try {
       await zk.createSocket();
@@ -257,28 +258,50 @@ export class AccessBiometricService {
         try { await zk.getUsers(); } catch { /* refresh cache */ }
       }
 
-      // Start enrollment - device will show "place your finger"
+      // Start enrollment — device will prompt "place your finger" 3 times
       this.logger.log(`Starting fingerprint enrollment for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
-      const enrolled = await zk.enrollUser(userId, fingerIndex);
 
-      if (!enrolled) {
-        this.logger.warn(`Fingerprint enrollment failed for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
-        return { success: false, fingerIndex, message: 'فشل تسجيل البصمة — لم يتم التحقق من الإصبع بشكل كافٍ. حاول مرة أخرى.' };
+      let enrolledBySDK = false;
+      try {
+        enrolledBySDK = await zk.enrollUser(userId, fingerIndex);
+        this.logger.log(`enrollUser returned: ${enrolledBySDK}`);
+      } catch (enrollErr) {
+        // enrollUser may throw even when enrollment succeeded on the device.
+        // Some ZKTeco models send packets with unexpected sizes causing a read error,
+        // but the fingerprint is registered successfully. We will verify by pulling template.
+        this.logger.warn(`enrollUser threw (may still have succeeded on device): ${enrollErr instanceof Error ? enrollErr.message : JSON.stringify(enrollErr)}`);
       }
 
-      this.logger.log(`Fingerprint enrolled successfully for "${person.name}" finger ${fingerIndex} on ${deviceIp}`);
+      // CRITICAL: Always pull the template from device to confirm enrollment.
+      // If the template is found, the fingerprint was registered regardless of enrollUser result.
+      await new Promise(r => setTimeout(r, 1500)); // brief wait for device to finalize
 
-      // Pull the newly enrolled template from the device
       let templateBase64: string | null = null;
+      let templateFound = false;
       try {
         const templateBuffer = await zk.getUserTemplate(userId, fingerIndex);
         if (templateBuffer && templateBuffer.length > 0) {
           templateBase64 = templateBuffer.toString('base64');
+          templateFound = true;
           this.logger.log(`Pulled enrolled template for finger ${fingerIndex} (${templateBuffer.length} bytes)`);
         }
       } catch (err) {
         this.logger.warn(`Failed to pull enrolled template for finger ${fingerIndex}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
       }
+
+      // Success = SDK confirmed OR template found on device
+      const success = enrolledBySDK || templateFound;
+
+      if (!success) {
+        this.logger.warn(`Enrollment failed for "${person.name}" finger ${fingerIndex} — no template found on device`);
+        return {
+          success: false,
+          fingerIndex,
+          message: 'فشل تسجيل البصمة — لم يتم التحقق من الإصبع. يرجى المحاولة مجدداً ووضع الإصبع 3 مرات بشكل واضح.',
+        };
+      }
+
+      this.logger.log(`Enrollment confirmed for "${person.name}" finger ${fingerIndex} (sdk=${enrolledBySDK}, template=${templateFound})`);
 
       // Update stored templates in DB
       const existing = person.fingerprintTemplates as unknown as StoredTemplates | null;
@@ -312,10 +335,14 @@ export class AccessBiometricService {
 
       this.logger.log(`Saved enrolled fingerprint to DB for "${person.name}" (finger ${fingerIndex})`);
 
+      const FINGER_LABELS_AR: Record<number, string> = {
+        0: 'إبهام يمين', 1: 'سبابة يمين', 2: 'وسطى يمين', 3: 'بنصر يمين', 4: 'خنصر يمين',
+        5: 'إبهام يسار', 6: 'سبابة يسار', 7: 'وسطى يسار', 8: 'بنصر يسار', 9: 'خنصر يسار',
+      };
       return {
         success: true,
         fingerIndex,
-        message: `تم تسجيل البصمة بنجاح — الإصبع ${fingerIndex}${templateBase64 ? '' : ' (لم يتم حفظ النموذج محلياً)'}`,
+        message: `تم تسجيل البصمة بنجاح — ${FINGER_LABELS_AR[fingerIndex] || `الإصبع ${fingerIndex}`}${templateBase64 ? '' : ' (القالب غير متوفر محلياً)'}`,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
