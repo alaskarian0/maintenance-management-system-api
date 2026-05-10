@@ -58,22 +58,8 @@ export class AccessDoorService {
       data: {
         name: dto.name,
         location: dto.location,
-        group: dto.group,
       },
     });
-
-    // Auto-create a device when ipAddress is provided
-    if (dto.ipAddress) {
-      await this.prisma.accessDevice.create({
-        data: {
-          doorId: door.id,
-          name: dto.name,
-          side: 'INSIDE',
-          ipAddress: dto.ipAddress,
-          serialNumber: dto.serialNumber,
-        },
-      });
-    }
 
     return this.findOne(door.id);
   }

@@ -127,7 +127,34 @@ export class FingerprintsService {
     });
   }
 
-  update(id: string, dto: UpdateFingerprintDto) {
+  async update(id: string, dto: UpdateFingerprintDto) {
+    if (dto.personType != null || dto.personId != null) {
+      const existing = await this.prisma.fingerprintRecord.findUnique({
+        where: { id },
+        select: { personType: true, personId: true },
+      });
+      if (!existing) return null;
+
+      const targetType = dto.personType ?? existing.personType;
+      const targetPersonId = dto.personId ?? existing.personId;
+
+      if (targetPersonId != null) {
+        const collision = await this.prisma.fingerprintRecord.findFirst({
+          where: {
+            personType: targetType,
+            personId: targetPersonId,
+            id: { not: id },
+          },
+          select: { id: true },
+        });
+        if (collision) {
+          throw new Error(
+            `Another fingerprint record already exists for ${targetType}:${targetPersonId}`,
+          );
+        }
+      }
+    }
+
     return this.prisma.fingerprintRecord.update({
       where: { id },
       data: dto,
