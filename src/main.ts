@@ -44,8 +44,25 @@ import * as path from 'path';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
+  
   app.enableCors({
-    origin: corsOrigins?.length ? corsOrigins : true,
+    origin: (origin, callback) => {
+      // If no origin (like mobile apps or curl), allow it
+      if (!origin) return callback(null, true);
+      
+      // If no allowed origins specified, allow and reflect
+      if (!corsOrigins || corsOrigins.length === 0) {
+        return callback(null, true);
+      }
+
+      // Check if origin matches any of the allowed origins
+      if (corsOrigins.includes(origin) || corsOrigins.includes('*')) {
+        callback(null, true);
+      } else {
+        console.warn(`CORS blocked for origin: ${origin}. Allowed: ${corsOrigins.join(', ')}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
