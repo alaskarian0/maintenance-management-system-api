@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateAdminLetterDto } from './dto/create-admin-letter.dto';
 import { UpdateAdminLetterDto } from './dto/update-admin-letter.dto';
@@ -160,6 +160,18 @@ export class AdminLettersService {
       where: { id: letterId },
     });
     if (!letter) throw new NotFoundException('Letter not found');
+
+    const existing = await this.prisma.adminLetterPerson.findFirst({
+      where: {
+        letterId,
+        personType: dto.personType,
+        personId: dto.personId ?? null,
+        personName: dto.personName,
+      },
+    });
+    if (existing) {
+      throw new ConflictException('هذا الشخص مرتبط بالكتاب مسبقاً');
+    }
 
     return this.prisma.adminLetterPerson.create({
       data: {

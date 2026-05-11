@@ -44,6 +44,7 @@ export class MaintenanceRequestsService {
         description: dto.description,
         priority: dto.priority ?? MaintenancePriority.MEDIUM,
         requestedBy: dto.requestedBy,
+        assignedTo: dto.assignedTo,
         notes: dto.notes,
       },
       include: INCLUDE,
@@ -148,8 +149,8 @@ export class MaintenanceRequestsService {
     await this.maintenanceService.create(row.deviceItemId, {
       description: dto.description ?? row.description,
       technicianName: dto.technicianName,
-      status: 'RESOLVED',
-      date: new Date().toISOString(),
+      status: dto.status ?? 'RESOLVED',
+      date: dto.date ?? new Date().toISOString(),
       partsUsed: dto.partsUsed,
     });
 

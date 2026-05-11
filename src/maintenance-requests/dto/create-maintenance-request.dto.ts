@@ -5,5 +5,6 @@ export class CreateMaintenanceRequestDto {
   description: string;
   priority?: MaintenancePriority;
   requestedBy: string;
+  assignedTo?: string;
   notes?: string;
 }

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { SparePartsService } from './spare-parts.service';
 import { CreateSparePartDto } from './dto/create-spare-part.dto';
+import { BulkImportSparePartsDto } from './dto/bulk-import-spare-parts.dto';
 import { UpdateSparePartDto } from './dto/update-spare-part.dto';
 import { UseSparePartDto } from './dto/use-spare-part.dto';
 
@@ -35,6 +36,11 @@ export class SparePartsController {
   @Post()
   create(@Body() dto: CreateSparePartDto) {
     return this.sparePartsService.create(dto);
+  }
+
+  @Post('bulk-import')
+  bulkImport(@Body() dto: BulkImportSparePartsDto) {
+    return this.sparePartsService.bulkImport(dto);
   }
 
   @Patch(':id')

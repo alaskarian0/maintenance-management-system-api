@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateSparePartDto } from './dto/create-spare-part.dto';
+import { BulkImportSparePartsDto } from './dto/bulk-import-spare-parts.dto';
 import { UpdateSparePartDto } from './dto/update-spare-part.dto';
 
 @Injectable()
@@ -128,5 +129,43 @@ export class SparePartsService {
       if (!part) continue;
       await this.useStock(part.id, qty, maintenanceId);
     }
+  }
+
+  async bulkImport(dto: BulkImportSparePartsDto) {
+    let created = 0;
+    let skipped = 0;
+    const total = dto.rows.length;
+
+    for (const row of dto.rows) {
+      const name = row.name?.trim();
+      if (!name) {
+        skipped++;
+        continue;
+      }
+      const existing = await this.prisma.sparePart.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } },
+      });
+      if (existing) {
+        skipped++;
+        continue;
+      }
+      try {
+        await this.prisma.sparePart.create({
+          data: {
+            name,
+            partNumber: row.partNumber?.trim(),
+            quantity: row.quantity ?? 0,
+            minQuantity: row.minQuantity ?? 5,
+            category: row.category?.trim(),
+            notes: row.notes?.trim(),
+          },
+        });
+        created++;
+      } catch {
+        skipped++;
+      }
+    }
+
+    return { created, skipped, total };
   }
 }
