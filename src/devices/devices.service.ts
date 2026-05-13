@@ -31,6 +31,9 @@ const DEVICE_INCLUDE = {
           },
         },
       },
+      _count: {
+        select: { maintenanceRecords: true },
+      },
     },
     orderBy: { createdAt: 'desc' },
   },
@@ -112,7 +115,7 @@ export class DevicesService {
       where.AND = [...prev, ...andFilters];
     }
 
-    const [data, total] = await Promise.all([
+    const [rawData, total] = await Promise.all([
       this.prisma.device.findMany({
         where,
         include: DEVICE_INCLUDE,
@@ -122,6 +125,16 @@ export class DevicesService {
       }),
       this.prisma.device.count({ where }),
     ]);
+
+    const data = rawData.map((d) => {
+      const matchedSerial =
+        search && d.items?.length
+          ? d.items.find((i: any) =>
+              i.serialNumber?.toLowerCase().includes(search.toLowerCase()),
+            )?.serialNumber ?? null
+          : null;
+      return { ...d, matchedSerialNumber: matchedSerial };
+    });
 
     return { data, total, page: Number(page), limit: Number(limit) };
   }

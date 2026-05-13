@@ -356,4 +356,66 @@ export class AccessBiometricService {
       }
     }
   }
+
+  async withdrawFingerprint(personId: string, deviceIp: string): Promise<{ success: boolean; message: string }> {
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new Error('Person not found');
+
+    const uid = person.personId || 0;
+    if (uid === 0) {
+      return { success: false, message: 'الشخص ليس لديه UID صالح' };
+    }
+
+    const userId = String(person.empCode || uid);
+
+    // Delete fingerprint templates from device using zklib-ts
+    const Zklib = require('zklib-ts/dist/index.cjs.js');
+    const zk = new Zklib(deviceIp, 4370, 5000, 10000);
+
+    try {
+      await zk.createSocket();
+    } catch (err) {
+      const msg = `لا يمكن الاتصال بالجهاز ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`;
+      this.logger.warn(msg);
+      return { success: false, message: msg };
+    }
+
+    let deletedCount = 0;
+    try {
+      await zk.getUsers();
+      for (let fid = 0; fid < 10; fid++) {
+        try {
+          await zk.deleteFinger(userId, fid);
+          deletedCount++;
+        } catch {
+          // No template at this finger index
+        }
+      }
+      this.logger.log(`Withdrawn ${deletedCount}/10 fingerprint templates for "${person.name}" from ${deviceIp}`);
+    } catch (err) {
+      this.logger.warn(`Failed to delete templates for "${person.name}" from ${deviceIp}: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+    }
+
+    try {
+      await zk.disconnect();
+    } catch {
+      // Ignore
+    }
+
+    // Update fingerprintStatus
+    await this.prisma.accessPerson.update({
+      where: { id: personId },
+      data: {
+        fingerprintStatus: 'not_pushed',
+        lastSyncAt: new Date(),
+      },
+    });
+
+    return {
+      success: deletedCount > 0,
+      message: deletedCount > 0
+        ? `تم سحب ${deletedCount} بصمة لـ «${person.name}» من الجهاز`
+        : `لم يتم العثور على بصمات لـ «${person.name}» على الجهاز`,
+    };
+  }
 }

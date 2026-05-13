@@ -161,6 +161,30 @@ export class AccessPersonController {
     return this.biometricService.enrollFingerprint(personId, device.ipAddress, dto.fingerIndex);
   }
 
+  @Post(':id/withdraw-fingerprint/:doorId')
+  async withdrawFingerprint(
+    @Param('id') personId: string,
+    @Param('doorId') doorId: string,
+  ) {
+    const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
+    if (!person) throw new NotFoundException('Person not found');
+
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: doorId },
+      include: { devices: true },
+    });
+    if (!door) throw new NotFoundException('Door not found');
+
+    const results: { device: string; success: boolean; message: string }[] = [];
+    for (const device of door.devices) {
+      if (!device.ipAddress) continue;
+      const result = await this.biometricService.withdrawFingerprint(personId, device.ipAddress);
+      results.push({ device: device.name, ...result });
+    }
+
+    return { person: person.name, door: door.name, results };
+  }
+
   @Post()
   create(@Body() dto: CreatePersonDto) {
     return this.personService.create(dto);
