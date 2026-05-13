@@ -47,6 +47,24 @@ export class AccessPersonController {
     return this.personService.searchResidents(query);
   }
 
+  @Get('search/hr-employees')
+  searchHrEmployees(@Query('q') query: string) {
+    return this.personService.searchHrEmployees(query);
+  }
+
+  @Get('hr-employees/:id')
+  getHrEmployee(@Param('id') id: string) {
+    const numericId = parseInt(id, 10);
+    if (isNaN(numericId)) {
+      throw new BadRequestException('ID must be a number');
+    }
+    const employee = this.personService.getHrEmployeeById(numericId);
+    if (!employee) {
+      throw new NotFoundException(`Employee with ID ${id} not found`);
+    }
+    return employee;
+  }
+
   @Post('sync-biometric')
   syncBiometricStatus() {
     return this.personService.syncBiometricStatus();

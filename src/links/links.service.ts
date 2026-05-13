@@ -39,6 +39,17 @@ export class LinksService {
     }
   }
 
+  async update(id: string, data: { name?: string; url?: string; apiUrl?: string | null }) {
+    try {
+      return await this.prisma.link.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      throw new NotFoundException();
+    }
+  }
+
   /** Legacy: batch ping only (no maintenance / logs). */
   async healthBatch() {
     const links = await this.prisma.link.findMany({

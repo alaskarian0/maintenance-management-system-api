@@ -21,6 +21,32 @@ export interface ResidentEntry {
   familyAddress: string;
 }
 
+export interface HrWorkplaceEntity {
+  id: number;
+  name: string;
+  entityCode: string;
+}
+
+export interface HrEmployee {
+  id: number;
+  code: number;
+  fullName: string | null;
+  phoneNumber: string | null;
+  isHoused: boolean | null;
+  location: {
+    governate: string | null;
+    region: 'southern' | 'middle' | 'northern' | 'current' | null;
+  };
+  birthDate: string | null;
+  hiringDate: string | null;
+  workplace: {
+    department: HrWorkplaceEntity | null;
+    division: HrWorkplaceEntity | null;
+    unit: HrWorkplaceEntity | null;
+  };
+  workingStatus: 'working' | 'retired' | 'resigned' | 'fired' | null;
+}
+
 interface EmployeesJson {
   name: string;
   headers: string[];
@@ -55,12 +81,21 @@ interface FamiliesResponse {
   data: Family[];
 }
 
+interface HrEmployeesJson {
+  fetchedAt: string;
+  source: string;
+  count: number;
+  data: HrEmployee[];
+}
+
 @Injectable()
 export class PersonSearchService {
   private employeesCache: EmployeeEntry[] | null = null;
   private employeesCacheAt = 0;
   private residentsCache: ResidentEntry[] | null = null;
   private residentsCacheAt = 0;
+  private hrEmployeesCache: HrEmployee[] | null = null;
+  private hrEmployeesCacheAt = 0;
   private readonly CACHE_TTL = 5 * 60 * 1000;
 
   searchEmployees(query: string): EmployeeEntry[] {
@@ -161,5 +196,62 @@ export class PersonSearchService {
     } catch {
       return this.residentsCache ?? [];
     }
+  }
+
+  searchHrEmployees(query: string): HrEmployee[] {
+    const data = this.loadHrEmployees();
+
+    if (!query || query.trim().length < 1) {
+      return data;
+    }
+
+    const q = query.trim().toLowerCase();
+    return data.filter((emp) => {
+      const name = emp.fullName?.toLowerCase() || '';
+      const id = String(emp.id);
+      const code = String(emp.code);
+      const phone = emp.phoneNumber?.toLowerCase() || '';
+      const dept = emp.workplace.department?.name?.toLowerCase() || '';
+      return (
+        name.includes(q) ||
+        id.includes(q) ||
+        code.includes(q) ||
+        phone.includes(q) ||
+        dept.includes(q)
+      );
+    });
+  }
+
+  getHrEmployeeById(id: number): HrEmployee | undefined {
+    const data = this.loadHrEmployees();
+    return data.find((emp) => emp.id === id);
+  }
+
+  getHrEmployeeByCode(code: number): HrEmployee | undefined {
+    const data = this.loadHrEmployees();
+    return data.find((emp) => emp.code === code);
+  }
+
+  private loadHrEmployees(): HrEmployee[] {
+    const now = Date.now();
+    if (
+      this.hrEmployeesCache &&
+      now - this.hrEmployeesCacheAt < this.CACHE_TTL
+    ) {
+      return this.hrEmployeesCache;
+    }
+
+    const jsonPath = path.join(
+      process.cwd(),
+      'prisma',
+      'data',
+      'employees-hr.json',
+    );
+    const raw = fs.readFileSync(jsonPath, 'utf8');
+    const doc = JSON.parse(raw) as HrEmployeesJson;
+
+    this.hrEmployeesCache = doc.data;
+    this.hrEmployeesCacheAt = now;
+    return doc.data;
   }
 }

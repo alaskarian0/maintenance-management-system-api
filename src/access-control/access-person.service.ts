@@ -9,9 +9,10 @@ import {
   PersonSearchService,
   EmployeeEntry,
   ResidentEntry,
+  HrEmployee,
 } from '../common/person-search.service';
 
-export { EmployeeEntry, ResidentEntry };
+export { EmployeeEntry, ResidentEntry, HrEmployee };
 
 @Injectable()
 export class AccessPersonService {
@@ -509,5 +510,13 @@ export class AccessPersonService {
 
   async searchResidents(query: string): Promise<ResidentEntry[]> {
     return this.personSearch.searchResidents(query);
+  }
+
+  searchHrEmployees(query: string): HrEmployee[] {
+    return this.personSearch.searchHrEmployees(query);
+  }
+
+  getHrEmployeeById(id: number): HrEmployee | undefined {
+    return this.personSearch.getHrEmployeeById(id);
   }
 }

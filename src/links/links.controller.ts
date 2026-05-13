@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -87,5 +88,13 @@ export class LinksController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.linksService.remove(id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() body: { name?: string; url?: string; apiUrl?: string | null },
+  ) {
+    return this.linksService.update(id, body);
   }
 }
