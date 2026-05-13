@@ -1,9 +1,21 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AccessFallbackService } from './access-fallback.service';
 import { CreateDoorDto } from './dto/create-door.dto';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
+
+const IPV4_REGEX =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$/;
+
+function validateIpAddress(ip: string | undefined): string | undefined {
+  if (ip === undefined || ip === null || ip === '') return undefined;
+  const trimmed = ip.trim();
+  if (!IPV4_REGEX.test(trimmed)) {
+    throw new BadRequestException('Invalid IP address format. Expected format: xxx.xxx.xxx.xxx (e.g., 192.168.1.100)');
+  }
+  return trimmed;
+}
 
 @Injectable()
 export class AccessDoorService {
@@ -84,13 +96,14 @@ export class AccessDoorService {
   async createDevice(doorId: string, dto: CreateDeviceDto) {
     const door = await this.prisma.accessDoor.findUnique({ where: { id: doorId } });
     if (!door) throw new NotFoundException('Door not found');
+    const ipAddress = validateIpAddress(dto.ipAddress);
     return this.prisma.accessDevice.create({
       data: {
         doorId,
         name: dto.name,
         side: dto.side || 'INSIDE',
         serialNumber: dto.serialNumber,
-        ipAddress: dto.ipAddress,
+        ipAddress,
         zkTerminalId: dto.zkTerminalId,
         isAttendance: dto.isAttendance ?? true,
       },
@@ -102,9 +115,13 @@ export class AccessDoorService {
       where: { id: deviceId, doorId },
     });
     if (!device) throw new NotFoundException('Device not found');
+    const data: any = { ...dto };
+    if (dto.ipAddress !== undefined) {
+      data.ipAddress = validateIpAddress(dto.ipAddress);
+    }
     return this.prisma.accessDevice.update({
       where: { id: deviceId },
-      data: dto,
+      data,
     });
   }
 

@@ -11,7 +11,7 @@ export class SearchService {
       return { devices: [], maintenance: [], spareParts: [] };
     }
 
-    const [devices, maintenance, spareParts] = await Promise.all([
+    const [rawDevices, maintenance, spareParts] = await Promise.all([
       this.prisma.device.findMany({
         where: {
           OR: [
@@ -30,6 +30,13 @@ export class SearchService {
           id: true,
           name: true,
           category: { select: { name: true } },
+          items: {
+            where: {
+              serialNumber: { contains: term, mode: 'insensitive' },
+            },
+            take: 1,
+            select: { id: true, serialNumber: true },
+          },
         },
       }),
       this.prisma.maintenanceRecord.findMany({
@@ -68,6 +75,17 @@ export class SearchService {
         select: { id: true, name: true, partNumber: true, quantity: true },
       }),
     ]);
+
+    const devices = rawDevices.map((d) => {
+      const matched = d.items?.[0];
+      return {
+        id: d.id,
+        name: d.name,
+        category: d.category,
+        matchedItemId: matched?.id ?? null,
+        matchedSerialNumber: matched?.serialNumber ?? null,
+      };
+    });
 
     return {
       devices,
