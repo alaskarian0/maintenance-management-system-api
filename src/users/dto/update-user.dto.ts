@@ -4,4 +4,5 @@ export class UpdateUserDto {
   role?: 'ADMIN' | 'USER' | 'TECHNICIAN';
   isActive?: boolean;
   password?: string;
+  workshopId?: string;
 }

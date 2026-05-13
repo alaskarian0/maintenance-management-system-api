@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CategoriesService } from '../categories/categories.service';
+import { WorkshopsService } from '../workshops/workshops.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 import { QueryDeviceDto } from './dto/query-device.dto';
@@ -48,6 +49,7 @@ export class DevicesService {
     private prisma: PrismaService,
     private activityLog: ActivityLogService,
     private categoriesService: CategoriesService,
+    private workshopsService: WorkshopsService,
   ) {}
 
   async findAll(query: QueryDeviceDto) {
@@ -62,6 +64,8 @@ export class DevicesService {
       dateTo,
       page = '1',
       limit = '20',
+      userWorkshopId,
+      userRole,
     } = query;
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -87,6 +91,17 @@ export class DevicesService {
       where.createdAt = {};
       if (dateFrom) where.createdAt.gte = new Date(dateFrom);
       if (dateTo) where.createdAt.lte = new Date(dateTo);
+    }
+    
+    // Workshop Visibility Filtering
+    if (userRole !== 'ADMIN') {
+      const accessibleIds = await this.workshopsService.getAccessibleWorkshopIds(userWorkshopId || null);
+      where.OR = [
+        ...(where.OR || []),
+        { items: { some: { workshopId: { in: accessibleIds } } } },
+        { items: { some: { workshopId: null } } },
+        { category: { isGlobal: true } },
+      ];
     }
 
     const andFilters: Prisma.DeviceWhereInput[] = [];
@@ -154,7 +169,10 @@ export class DevicesService {
         items: {
           create: serialNumbers
             .filter((s) => s.trim())
-            .map((serialNumber) => ({ serialNumber: serialNumber.trim() })),
+            .map((serialNumber) => ({ 
+              serialNumber: serialNumber.trim(),
+              workshopId: dto.workshopId,
+            })),
         },
       },
       include: DEVICE_INCLUDE,
@@ -365,8 +383,20 @@ export class DevicesService {
   }
 
   /** Fetch all items across devices for the maintenance combo */
-  async findAllItems() {
+  async findAllItems(userWorkshopId?: string, userRole?: string) {
+    const where: Prisma.DeviceItemWhereInput = {};
+    
+    if (userRole && userRole !== 'ADMIN') {
+      const accessibleIds = await this.workshopsService.getAccessibleWorkshopIds(userWorkshopId || null);
+      where.OR = [
+        { workshopId: { in: accessibleIds } },
+        { workshopId: null },
+        { device: { category: { isGlobal: true } } },
+      ];
+    }
+
     return this.prisma.deviceItem.findMany({
+      where,
       include: {
         device: {
           include: {

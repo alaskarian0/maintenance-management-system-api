@@ -29,13 +29,20 @@ export class DevicesController {
   }
 
   @Get()
-  findAll(@Query() query: QueryDeviceDto) {
-    return this.devicesService.findAll(query);
+  findAll(
+    @Query() query: QueryDeviceDto,
+    @Headers('x-user-role') userRole?: string,
+    @Headers('x-workshop-id') userWorkshopId?: string,
+  ) {
+    return this.devicesService.findAll({ ...query, userRole, userWorkshopId });
   }
 
   @Get('items')
-  findAllItems() {
-    return this.devicesService.findAllItems();
+  findAllItems(
+    @Headers('x-user-role') userRole?: string,
+    @Headers('x-workshop-id') userWorkshopId?: string,
+  ) {
+    return this.devicesService.findAllItems(userWorkshopId, userRole);
   }
 
   @Post('bulk-import')

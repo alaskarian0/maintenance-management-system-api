@@ -71,6 +71,13 @@ async function bootstrap() {
       'Accept',
       'X-User-Name',
       'X-User-Id',
+      'X-User-Role',
+      'X-Workshop-Id',
+      'x-user-name',
+      'x-user-id',
+      'x-user-role',
+      'x-workshop-id',
+      'X-Requested-With',
     ],
   });
   app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

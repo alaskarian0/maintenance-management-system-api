@@ -11,4 +11,6 @@ export class QueryDeviceDto {
   dateTo?: string;
   page?: string;
   limit?: string;
+  userWorkshopId?: string;
+  userRole?: string;
 }

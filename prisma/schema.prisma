@@ -55,6 +55,8 @@ model User {
   passwordHash  String
   role          UserRole       @default(USER)
   isActive      Boolean        @default(true)
+  workshopId    String?
+  workshop      Workshop?      @relation(fields: [workshopId], references: [id])
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   notifications Notification[]
@@ -103,6 +105,7 @@ model Category {
   name         String
   deviceType   DeviceType @relation(fields: [deviceTypeId], references: [id], onDelete: Cascade)
   deviceTypeId String
+  isGlobal     Boolean    @default(false)
   devices      Device[]
   createdAt    DateTime   @default(now())
 
@@ -138,6 +141,8 @@ model DeviceItem {
   device               Device               @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   deviceId             String
   status               DeviceItemStatus     @default(AVAILABLE)
+  workshopId           String?
+  workshop             Workshop?            @relation(fields: [workshopId], references: [id])
   assignment           DeviceAssignment?
   maintenanceRecords   MaintenanceRecord[]
   maintenanceRequests  MaintenanceRequest[]
@@ -260,12 +265,29 @@ model MaintenanceRequest {
   requestedBy  String
   approvedBy   String?
   assignedTo   String?
+  workshopId   String?
+  workshop     Workshop?                @relation(fields: [workshopId], references: [id])
   notes        String?
   createdAt    DateTime                 @default(now())
   updatedAt    DateTime                 @updatedAt
 
   @@index([status, createdAt(sort: Desc)])
   @@index([assignedTo, status])
+}
+
+model Workshop {
+  id            String               @id @default(cuid())
+  name          String               @unique
+  users         User[]
+  deviceItems   DeviceItem[]
+  requests      MaintenanceRequest[]
+
+  // Cross-workshop visibility (Self-relation)
+  allowedToSee  Workshop[]           @relation("WorkshopVisibility")
+  seenBy        Workshop[]           @relation("WorkshopVisibility")
+
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 }
 
 model SparePart {

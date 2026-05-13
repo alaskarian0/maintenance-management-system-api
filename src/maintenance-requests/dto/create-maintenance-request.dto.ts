@@ -7,4 +7,5 @@ export class CreateMaintenanceRequestDto {
   requestedBy: string;
   assignedTo?: string;
   notes?: string;
+  workshopId?: string;
 }

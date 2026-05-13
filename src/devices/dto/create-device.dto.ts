@@ -6,4 +6,5 @@ export class CreateDeviceDto {
   nature?: DeviceNature;
   notes?: string;
   serialNumbers?: string[];
+  workshopId?: string;
 }

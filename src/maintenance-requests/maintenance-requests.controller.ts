@@ -6,6 +6,7 @@ import {
   Patch,
   Post,
   Query,
+  Headers,
 } from '@nestjs/common';
 import { MaintenanceRequestStatus } from '@prisma/client';
 import { MaintenanceRequestsService } from './maintenance-requests.service';
@@ -27,12 +28,16 @@ export class MaintenanceRequestsController {
     @Query('requestedBy') requestedBy?: string,
     @Query('assignedTo') assignedTo?: string,
     @Query('deviceItemId') deviceItemId?: string,
+    @Headers('x-user-role') userRole?: string,
+    @Headers('x-workshop-id') userWorkshopId?: string,
   ) {
     return this.maintenanceRequestsService.findAll({
       status,
       requestedBy,
       assignedTo,
       deviceItemId,
+      userRole,
+      userWorkshopId,
     });
   }
 

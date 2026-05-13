@@ -20,6 +20,7 @@ import { SearchModule } from './search/search.module';
 import { AccessControlModule } from './access-control/access-control.module';
 import { AdminLettersModule } from './admin-letters/admin-letters.module';
 import { CommonModule } from './common/common.module';
+import { WorkshopsModule } from './workshops/workshops.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { CommonModule } from './common/common.module';
     SearchModule,
     AccessControlModule,
     AdminLettersModule,
+    WorkshopsModule,
   ],
 })
 export class AppModule {}

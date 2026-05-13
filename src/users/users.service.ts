@@ -17,6 +17,13 @@ export class UsersService {
     fullName: true,
     role: true,
     isActive: true,
+    workshopId: true,
+    workshop: {
+      select: {
+        id: true,
+        name: true,
+      },
+    },
     createdAt: true,
     updatedAt: true,
   } satisfies Prisma.UserSelect;
@@ -44,6 +51,7 @@ export class UsersService {
         fullName: dto.fullName,
         passwordHash,
         role: dto.role,
+        workshop: dto.workshopId ? { connect: { id: dto.workshopId } } : undefined,
       },
       select: this.userSelect,
     });
@@ -69,6 +77,9 @@ export class UsersService {
     if (dto.userName !== undefined) data.userName = dto.userName;
     if (dto.role !== undefined) data.role = dto.role;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
+    if (dto.workshopId !== undefined) {
+      data.workshop = dto.workshopId ? { connect: { id: dto.workshopId } } : { disconnect: true };
+    }
     if (dto.password) {
       data.passwordHash = await bcrypt.hash(dto.password, this.saltRounds);
     }

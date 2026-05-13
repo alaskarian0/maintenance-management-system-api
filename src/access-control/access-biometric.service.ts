@@ -358,6 +358,16 @@ export class AccessBiometricService {
   }
 
   async withdrawFingerprint(personId: string, deviceIp: string): Promise<{ success: boolean; message: string }> {
+    // 1. Pull and store templates first!
+    let pullCount = 0;
+    try {
+      const pullResult = await this.pullAndStoreTemplates(personId, deviceIp);
+      pullCount = pullResult.fingers;
+      this.logger.log(`Pulled ${pullCount} fingers before withdrawing for person ${personId}`);
+    } catch (err) {
+      this.logger.warn(`Failed to pull templates before withdrawing: ${err}`);
+    }
+
     const person = await this.prisma.accessPerson.findUnique({ where: { id: personId } });
     if (!person) throw new Error('Person not found');
 
@@ -366,9 +376,6 @@ export class AccessBiometricService {
       return { success: false, message: 'الشخص ليس لديه UID صالح' };
     }
 
-    const userId = String(person.empCode || uid);
-
-    // Delete fingerprint templates from device using zklib-ts
     const Zklib = require('zklib-ts/dist/index.cjs.js');
     const zk = new Zklib(deviceIp, 4370, 5000, 10000);
 
@@ -382,10 +389,21 @@ export class AccessBiometricService {
 
     let deletedCount = 0;
     try {
-      await zk.getUsers();
+      const usersResult = await zk.getUsers();
+      const deviceUsers = Array.isArray(usersResult) ? usersResult : (usersResult?.data || []);
+      
+      const targetUserId = String(person.empCode || uid);
+      const matchingDeviceUser = deviceUsers.find(
+        (u: any) => String(u.userId || u.user_id || '') === targetUserId || u.uid === uid
+      );
+      
+      const deviceUserId = matchingDeviceUser 
+        ? String((matchingDeviceUser as any).userId || (matchingDeviceUser as any).user_id || targetUserId)
+        : targetUserId;
+
       for (let fid = 0; fid < 10; fid++) {
         try {
-          await zk.deleteFinger(userId, fid);
+          await zk.deleteFinger(deviceUserId, fid);
           deletedCount++;
         } catch {
           // No template at this finger index
@@ -411,11 +429,13 @@ export class AccessBiometricService {
       },
     });
 
+    const totalProcessed = Math.max(pullCount, deletedCount);
+
     return {
-      success: deletedCount > 0,
-      message: deletedCount > 0
-        ? `تم سحب ${deletedCount} بصمة لـ «${person.name}» من الجهاز`
-        : `لم يتم العثور على بصمات لـ «${person.name}» على الجهاز`,
+      success: true, // success true because if it wasn't found, it's effectively withdrawn. Connection succeeded.
+      message: totalProcessed > 0
+        ? `تم سحب ${totalProcessed} بصمة لـ «${person.name}» من الجهاز`
+        : `تم السحب (لم يتم العثور على بصمات لـ «${person.name}» على الجهاز)`,
     };
   }
 }

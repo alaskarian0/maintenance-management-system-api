@@ -3,4 +3,5 @@ export class CreateUserDto {
   fullName: string;
   password: string;
   role: 'ADMIN' | 'USER' | 'TECHNICIAN';
+  workshopId?: string;
 }

@@ -9,6 +9,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { MaintenanceService } from '../maintenance/maintenance.service';
+import { WorkshopsService } from '../workshops/workshops.service';
+import { Prisma } from '@prisma/client';
 import { CreateMaintenanceRequestDto } from './dto/create-maintenance-request.dto';
 import { AssignMaintenanceRequestDto } from './dto/assign-maintenance-request.dto';
 import { ApproveMaintenanceRequestDto } from './dto/approve-maintenance-request.dto';
@@ -35,6 +37,7 @@ export class MaintenanceRequestsService {
   constructor(
     private prisma: PrismaService,
     private maintenanceService: MaintenanceService,
+    private workshopsService: WorkshopsService,
   ) {}
 
   create(dto: CreateMaintenanceRequestDto) {
@@ -46,22 +49,34 @@ export class MaintenanceRequestsService {
         requestedBy: dto.requestedBy,
         assignedTo: dto.assignedTo,
         notes: dto.notes,
+        workshopId: dto.workshopId,
       },
       include: INCLUDE,
     });
   }
-
   async findAll(query: {
     status?: MaintenanceRequestStatus;
     requestedBy?: string;
     assignedTo?: string;
     deviceItemId?: string;
+    userWorkshopId?: string;
+    userRole?: string;
   }) {
-    const where: Record<string, unknown> = {};
+    const where: Prisma.MaintenanceRequestWhereInput = {};
     if (query.status) where.status = query.status;
     if (query.requestedBy) where.requestedBy = query.requestedBy;
     if (query.assignedTo) where.assignedTo = query.assignedTo;
     if (query.deviceItemId) where.deviceItemId = query.deviceItemId;
+
+    // Workshop Visibility Filtering
+    if (query.userRole !== 'ADMIN') {
+      const accessibleIds = await this.workshopsService.getAccessibleWorkshopIds(query.userWorkshopId || null);
+      where.OR = [
+        { workshopId: { in: accessibleIds } },
+        { workshopId: null },
+        { deviceItem: { device: { category: { isGlobal: true } } } },
+      ];
+    }
 
     const priorityOrder: MaintenancePriority[] = [
       MaintenancePriority.CRITICAL,
