@@ -21,6 +21,7 @@ import { AccessControlModule } from './access-control/access-control.module';
 import { AdminLettersModule } from './admin-letters/admin-letters.module';
 import { CommonModule } from './common/common.module';
 import { WorkshopsModule } from './workshops/workshops.module';
+import { AlertsModule } from './alerts/alerts.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { WorkshopsModule } from './workshops/workshops.module';
     AccessControlModule,
     AdminLettersModule,
     WorkshopsModule,
+    AlertsModule,
   ],
 })
 export class AppModule {}

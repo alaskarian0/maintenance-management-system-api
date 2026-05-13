@@ -1,3 +1,5 @@
+import { PermissionKey } from './create-user.dto';
+
 export class UpdateUserDto {
   fullName?: string;
   userName?: string;
@@ -5,4 +7,5 @@ export class UpdateUserDto {
   isActive?: boolean;
   password?: string;
   workshopId?: string;
+  permissions?: PermissionKey[];
 }

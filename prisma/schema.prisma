@@ -48,6 +48,9 @@ enum UserRole {
   TECHNICIAN
 }
 
+/// Available permission keys:
+/// - "ACCESS_CONTROL"  — manage persons, fingerprint devices, access logs, admin letters
+/// - "DEVICE_IMPORT"   — import devices from CSV
 model User {
   id            String         @id @default(cuid())
   userName      String         @unique
@@ -57,6 +60,7 @@ model User {
   isActive      Boolean        @default(true)
   workshopId    String?
   workshop      Workshop?      @relation(fields: [workshopId], references: [id])
+  permissions   Json           @default("[]")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   notifications Notification[]

@@ -31,6 +31,6 @@ import { AccessBiometricService } from './access-biometric.service';
     AccessSyncScheduler,
     AccessBiometricService,
   ],
-  exports: [AccessLogService],
+  exports: [AccessLogService, AccessDeviceSyncService],
 })
 export class AccessControlModule {}

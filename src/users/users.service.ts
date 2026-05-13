@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma.service';
-import { CreateUserDto } from './dto/create-user.dto';
+import { CreateUserDto, PermissionKey } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { Prisma } from '@prisma/client';
 
@@ -18,6 +18,7 @@ export class UsersService {
     role: true,
     isActive: true,
     workshopId: true,
+    permissions: true,
     workshop: {
       select: {
         id: true,
@@ -52,6 +53,7 @@ export class UsersService {
         passwordHash,
         role: dto.role,
         workshop: dto.workshopId ? { connect: { id: dto.workshopId } } : undefined,
+        permissions: dto.permissions ?? [],
       },
       select: this.userSelect,
     });
@@ -82,6 +84,9 @@ export class UsersService {
     }
     if (dto.password) {
       data.passwordHash = await bcrypt.hash(dto.password, this.saltRounds);
+    }
+    if (dto.permissions !== undefined) {
+      data.permissions = dto.permissions as PermissionKey[];
     }
 
     return this.prisma.user.update({
