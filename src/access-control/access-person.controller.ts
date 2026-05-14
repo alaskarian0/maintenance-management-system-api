@@ -129,6 +129,11 @@ export class AccessPersonController {
     return this.personService.findOne(id);
   }
 
+  @Get(':id/biometric-summary')
+  getBiometricSummary(@Param('id') id: string) {
+    return this.biometricService.getPersonBiometricSummary(id);
+  }
+
   @Post(':id/transfer-biometric/:targetDoorId')
   async transferBiometric(
     @Param('id') personId: string,

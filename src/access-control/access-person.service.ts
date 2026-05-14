@@ -61,7 +61,7 @@ export class AccessPersonService {
         where,
         orderBy: { createdAt: 'desc' },
         include: {
-          _count: { select: { permissions: true } },
+          _count: { select: { permissions: true, fingerprintTemplates: true, faceTemplates: true } },
           permissions: {
             select: {
               doorId: true,
@@ -104,6 +104,8 @@ export class AccessPersonService {
       where: { id },
       include: {
         permissions: { include: { door: { include: { devices: true } } } },
+        fingerprintTemplates: { select: { id: true, fingerIndex: true, valid: true, source: true } },
+        faceTemplates: { select: { id: true, faceIndex: true, valid: true, source: true } },
       },
     });
   }
