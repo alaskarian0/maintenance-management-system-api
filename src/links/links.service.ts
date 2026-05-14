@@ -26,7 +26,6 @@ export class LinksService {
         name: dto.name,
         url: dto.url,
         apiUrl: dto.apiUrl ?? null,
-        systemType: dto.systemType ?? 'FRONTEND',
       },
     });
   }
@@ -190,17 +189,18 @@ export class LinksService {
   }
 
   /**
-   * One-time cleanup: merges standalone API entries into their matching
-   * FRONTEND entries by setting apiUrl, then deletes the API entries.
-   * Matching is done by stripping " API" suffix from the API entry name.
+   * One-time cleanup: finds standalone API entries (url matches an apiUrl
+   * pattern or entries with no matching frontend) and merges them into
+   * their matching entries by setting apiUrl, then deletes the API entries.
+   * Matching is done by stripping " API" suffix from the entry name.
    */
   async cleanupDuplicateApiLinks() {
     const links = await this.prisma.link.findMany({
       orderBy: { createdAt: 'asc' },
     });
 
-    const apiEntries = links.filter((l) => l.systemType === 'API');
-    const frontendEntries = links.filter((l) => l.systemType === 'FRONTEND');
+    const apiEntries = links.filter((l) => /\s*API\s*$/.test(l.name));
+    const frontendEntries = links.filter((l) => !/\s*API\s*$/.test(l.name));
 
     const results: { merged: string[]; deleted: string[]; skipped: string[] } = {
       merged: [],

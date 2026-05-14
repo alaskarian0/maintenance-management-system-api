@@ -7,18 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum SystemType {
-  FRONTEND
-  API
-}
-
 model Link {
   id            String          @id @default(cuid())
   name          String
   url           String
   apiUrl        String?
   isMaintenance Boolean         @default(false)
-  systemType    SystemType      @default(FRONTEND)
   createdAt     DateTime        @default(now())
   statusLogs    LinkStatusLog[]
 }
@@ -367,8 +361,8 @@ model AccessPerson {
   faceStatus       String                @default("none")
   enrollDevice     String?
   lastSyncAt       DateTime?
-  fingerprintTemplates Json?
-  faceTemplates        Json?
+  fingerprintTemplatesData Json?
+  faceTemplatesData       Json?
   isActive         Boolean               @default(true)
   deletedAt        DateTime?             // Soft delete timestamp
   birthDate        DateTime?
@@ -384,6 +378,9 @@ model AccessPerson {
   permissions      AccessPermission[]
   logs             AccessLog[]
   pendingOps       PendingDeviceOp[]
+  fingerprintTemplates FingerprintTemplate[]
+  faceTemplates    FaceTemplate[]
+  tempSchedules    UserTempSchedule[]
   department       Department?           @relation(fields: [departmentId], references: [id])
   unit             Unit?                 @relation(fields: [unitId], references: [id])
 }
@@ -437,6 +434,79 @@ model PendingDeviceOp {
   door        AccessDoor   @relation(fields: [doorId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+}
+
+model FingerprintTemplate {
+  id               String   @id @default(cuid())
+  person           AccessPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  personId         String
+  zktecoUserId     Int
+  fingerIndex      Int
+  valid            Int      @default(1)
+  templateData     String   @db.Text
+  templateSize     Int?
+  templateHash     String?
+  zktecoTemplateId Int?
+  source           String   @default("migration")
+  createdAt        DateTime @default(now())
+
+  @@unique([personId, fingerIndex])
+  @@index([zktecoUserId])
+  @@index([templateHash])
+}
+
+model FaceTemplate {
+  id               String   @id @default(cuid())
+  person           AccessPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  personId         String
+  zktecoUserId     Int
+  faceIndex        Int      @default(0)
+  valid            Int      @default(1)
+  templateData     String   @db.Text
+  templateSize     Int?
+  templateHash     String?
+  zktecoTemplateId Int?
+  source           String   @default("migration")
+  createdAt        DateTime @default(now())
+
+  @@unique([personId, faceIndex])
+  @@index([zktecoUserId])
+}
+
+model ShiftClass {
+  id              String   @id @default(cuid())
+  zktecoSchClassId Int     @unique
+  name            String
+  startTime       DateTime
+  endTime         DateTime
+  lateMinutes     Int      @default(0)
+  earlyMinutes    Int      @default(0)
+  checkIn         Boolean  @default(true)
+  checkOut        Boolean  @default(true)
+  workDay         Float    @default(1.0)
+  color           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  schedules       UserTempSchedule[]
+}
+
+model UserTempSchedule {
+  id              String     @id @default(cuid())
+  person          AccessPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  personId        String
+  shiftClass      ShiftClass? @relation(fields: [shiftClassId], references: [id], onDelete: SetNull)
+  shiftClassId    String?
+  comeTime        DateTime
+  leaveTime       DateTime
+  scheduleType    Int        @default(0)
+  flag            Int        @default(1)
+  overtime        Boolean    @default(false)
+  zktecoSchClassId Int?
+  createdAt       DateTime   @default(now())
+
+  @@index([personId, comeTime])
+  @@index([comeTime])
 }
 
 model AdminLetter {

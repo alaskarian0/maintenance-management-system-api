@@ -12,6 +12,10 @@ import { AccessLogController } from './access-log.controller';
 import { AccessLogService } from './access-log.service';
 import { AccessSyncScheduler } from './access-sync.scheduler';
 import { AccessBiometricService } from './access-biometric.service';
+import { ShiftClassService } from './shift-class.service';
+import { ShiftClassController } from './shift-class.controller';
+import { UserTempScheduleService } from './user-temp-schedule.service';
+import { UserTempScheduleController } from './user-temp-schedule.controller';
 
 @Module({
   imports: [PrismaModule],
@@ -20,6 +24,8 @@ import { AccessBiometricService } from './access-biometric.service';
     AccessPersonController,
     AccessPermissionController,
     AccessLogController,
+    ShiftClassController,
+    UserTempScheduleController,
   ],
   providers: [
     AccessFallbackService,
@@ -30,7 +36,9 @@ import { AccessBiometricService } from './access-biometric.service';
     AccessLogService,
     AccessSyncScheduler,
     AccessBiometricService,
+    ShiftClassService,
+    UserTempScheduleService,
   ],
-  exports: [AccessLogService, AccessDeviceSyncService],
+  exports: [AccessLogService, AccessDeviceSyncService, ShiftClassService, UserTempScheduleService],
 })
 export class AccessControlModule {}

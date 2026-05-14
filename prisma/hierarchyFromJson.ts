@@ -1,4 +1,6 @@
 import type { PrismaClient, Unit } from '@prisma/client';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 interface HierarchyEntity {
   id: number;
@@ -13,6 +15,13 @@ interface HierarchyEntity {
 interface HierarchyResponse {
   success: boolean;
   data: HierarchyEntity[];
+}
+
+interface HierarchyJsonFile {
+  source: string;
+  field: string;
+  count: number;
+  unique: string[];
 }
 
 async function fetchHierarchy(): Promise<HierarchyEntity[]> {
@@ -188,49 +197,91 @@ export async function seedDepartmentsFromHierarchy(
   return allUnits;
 }
 
-async function createFallbackDepartments(prisma: PrismaClient): Promise<Unit[]> {
-  const departments = [
-    {
-      name: 'الصيانة العامة',
-      divisions: [
-        { name: 'المعدات الميكانيكية', units: ['مضخات', 'محركات', 'توربينات'] },
-        { name: 'الكهرباء', units: ['لوحات كهربائية', 'كابلات'] },
-      ],
-    },
-    {
-      name: 'تقنية المعلومات',
-      divisions: [
-        { name: 'الشبكات', units: ['خوادم', 'سويتشات'] },
-        { name: 'الدعم الفني', units: ['أجهزة حاسب', 'طابعات'] },
-      ],
-    },
-    {
-      name: 'التشغيل والإنتاج',
-      divisions: [
-        { name: 'التعبئة والتغليف', units: ['خط إنتاج ١', 'خط إنتاج ٢'] },
-        { name: 'الجودة', units: ['معايرة', 'فحص'] },
-      ],
-    },
-  ];
+function parseHierarchyFromJsonFile(): Map<string, Map<string, Set<string>>> {
+  const filePath = join(__dirname, 'data', 'employes2-unique-hierarchy.json');
+  const raw = readFileSync(filePath, 'utf-8');
+  const json: HierarchyJsonFile = JSON.parse(raw);
 
+  const tree = new Map<string, Map<string, Set<string>>>();
+
+  for (const entry of json.unique) {
+    const parts = entry.split(/\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) continue;
+
+    const deptName = parts[0];
+    if (!deptName) continue;
+
+    if (!tree.has(deptName)) tree.set(deptName, new Map());
+    const divMap = tree.get(deptName)!;
+
+    if (parts.length === 1) {
+      // Department with no children — add a "عام" division placeholder
+      if (!divMap.has('عام')) divMap.set('عام', new Set());
+      continue;
+    }
+
+    // Second level = division, everything after = units
+    const divName = parts[1];
+    if (!divName) continue;
+    if (!divMap.has(divName)) divMap.set(divName, new Set());
+    const units = divMap.get(divName)!;
+
+    // Collect all deeper levels as unit names
+    for (let i = 2; i < parts.length; i++) {
+      if (parts[i]) units.add(parts[i]);
+    }
+
+    // If the division has no units, at least the division name exists
+  }
+
+  return tree;
+}
+
+async function createFallbackDepartments(prisma: PrismaClient): Promise<Unit[]> {
+  const tree = parseHierarchyFromJsonFile();
   const allUnits: Unit[] = [];
 
-  for (const dept of departments) {
+  const sortedDepts = [...tree.keys()].sort((a, b) =>
+    a.localeCompare(b, 'ar'),
+  );
+
+  console.log(
+    `[seed] Fallback: loading ${sortedDepts.length} departments from JSON hierarchy file`,
+  );
+
+  for (const deptName of sortedDepts) {
+    const divMap = tree.get(deptName)!;
+    const sortedDivs = [...divMap.keys()]
+      .filter((dn) => (divMap.get(dn)?.size ?? 0) > 0)
+      .sort((a, b) => a.localeCompare(b, 'ar'));
+
+    if (sortedDivs.length === 0) continue;
+
     const created = await prisma.department.create({
       data: {
-        name: dept.name,
+        name: deptName,
         divisions: {
-          create: dept.divisions.map((div) => ({
-            name: div.name,
-            units: { create: div.units.map((u) => ({ name: u })) },
-          })),
+          create: sortedDivs.map((divName) => {
+            const unitNames = [...divMap.get(divName)!].sort((a, b) =>
+              a.localeCompare(b, 'ar'),
+            );
+            return {
+              name: divName,
+              units: {
+                create: unitNames.map((unitName) => ({ name: unitName })),
+              },
+            };
+          }),
         },
       },
       include: { divisions: { include: { units: true } } },
     });
+
     allUnits.push(...created.divisions.flatMap((d) => d.units));
   }
 
-  console.log(`[seed] Created ${departments.length} fallback departments, ${allUnits.length} units total`);
+  console.log(
+    `[seed] Fallback: created ${sortedDepts.length} departments, ${allUnits.length} units total from JSON file`,
+  );
   return allUnits;
 }
