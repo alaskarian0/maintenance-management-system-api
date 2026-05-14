@@ -99,8 +99,10 @@ export class AlertsService {
     setImmediate(async () => {
       try {
         const result = await this.sync.removeFromAllDevices({
-          ...person,
-          isActive: false,
+          id: person.id,
+          personId: person.personId,
+          empCode: person.empCode,
+          name: person.name,
         });
         this.logger.log(
           `Stopped access for "${person.name}": ${result.success} success, ${result.failed} failed`,
