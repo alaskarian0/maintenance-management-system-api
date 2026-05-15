@@ -352,6 +352,7 @@ model AccessPerson {
   personId         Int?
   empCode          String?
   zkEmployeeId     Int?
+  identifier       String?               // External ID from source system (employee seq, resident id, HR code)
   region           String?
   note             String?
   phone            String?
@@ -383,6 +384,8 @@ model AccessPerson {
   tempSchedules    UserTempSchedule[]
   department       Department?           @relation(fields: [departmentId], references: [id])
   unit             Unit?                 @relation(fields: [unitId], references: [id])
+
+  @@index([identifier])
 }
 
 model AccessPermission {

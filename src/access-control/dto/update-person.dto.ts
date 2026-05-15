@@ -1,6 +1,7 @@
 export class UpdatePersonDto {
   name?: string;
   empCode?: string;
+  identifier?: string;
   region?: string;
   note?: string;
   phone?: string;

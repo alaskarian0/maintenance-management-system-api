@@ -52,6 +52,7 @@ export class AccessPersonService {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { empCode: { contains: search, mode: 'insensitive' } },
+        { identifier: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search, mode: 'insensitive' } },
       ];
     }
@@ -115,6 +116,7 @@ export class AccessPersonService {
     name: string;
     personId?: number;
     empCode?: string;
+    identifier?: string;
     region?: string;
     note?: string;
     phone?: string;
@@ -145,7 +147,7 @@ export class AccessPersonService {
   async update(
     id: string,
     data: {
-      name?: string; empCode?: string; region?: string; note?: string; phone?: string;
+      name?: string; empCode?: string; identifier?: string; region?: string; note?: string; phone?: string;
       isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string;
       birthDate?: string; courtNumber?: string; departmentId?: string; unitId?: string;
       address?: string; hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string;

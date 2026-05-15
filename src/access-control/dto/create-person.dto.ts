@@ -3,6 +3,7 @@ export class CreatePersonDto {
   name: string;
   personId?: number;
   empCode?: string;
+  identifier?: string;
   region?: string;
   note?: string;
   phone?: string;
