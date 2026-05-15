@@ -206,19 +206,20 @@ export class AccessDoorService {
 
   async pingAllDevices(): Promise<{ id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[]> {
     const devices = await this.prisma.accessDevice.findMany();
-    const results = [];
 
-    for (const device of devices) {
-      const result = await this.pingDevice(device.id);
-      results.push({
-        id: device.id,
-        doorId: device.doorId,
-        name: device.name,
-        reachable: result.reachable,
-        ip: result.ip,
-        responseMs: result.responseMs,
-      });
-    }
+    const results = await Promise.all(
+      devices.map(async (device) => {
+        const result = await this.pingDevice(device.id);
+        return {
+          id: device.id,
+          doorId: device.doorId,
+          name: device.name,
+          reachable: result.reachable,
+          ip: result.ip,
+          responseMs: result.responseMs,
+        };
+      }),
+    );
 
     return results;
   }
