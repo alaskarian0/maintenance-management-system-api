@@ -23,6 +23,7 @@ import { CreatePersonDto } from './dto/create-person.dto';
 import { UpdatePersonDto } from './dto/update-person.dto';
 import { QueryPersonDto } from './dto/query-person.dto';
 import { EnrollFingerprintDto } from './dto/enroll-fingerprint.dto';
+import { BatchResolveDto } from './dto/resolve-device-users.dto';
 import { PrismaService } from '../prisma.service';
 import { PermissionsGuard } from '../common/permissions/permissions.guard';
 import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
@@ -83,6 +84,16 @@ export class AccessPersonController {
   @Post('sync-from-device/:doorId')
   syncFromDevice(@Param('doorId') doorId: string) {
     return this.personService.syncFromDevice(doorId);
+  }
+
+  @Post('resolve-device-users/:doorId')
+  resolveDeviceUsers(@Param('doorId') doorId: string) {
+    return this.personService.resolveDeviceUsers(doorId);
+  }
+
+  @Post('batch-resolve')
+  batchResolve(@Body() dto: BatchResolveDto) {
+    return this.personService.batchResolve(dto);
   }
 
   @Post(':id/photo')

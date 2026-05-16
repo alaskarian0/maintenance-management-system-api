@@ -5,6 +5,7 @@ import { AccessDeviceSyncService } from './access-device-sync.service';
 import { AccessFallbackService } from './access-fallback.service';
 import { AccessBiometricService } from './access-biometric.service';
 import { QueryPersonDto } from './dto/query-person.dto';
+import { BatchResolveDto, ResolveItemDto } from './dto/resolve-device-users.dto';
 import {
   PersonSearchService,
   EmployeeEntry,
@@ -532,5 +533,319 @@ export class AccessPersonService {
 
   getHrEmployeeById(id: number): HrEmployee | undefined {
     return this.personSearch.getHrEmployeeById(id);
+  }
+
+  // ── Device User Resolution ──────────────────────────────────────
+
+  async resolveDeviceUsers(doorId: string) {
+    const door = await this.prisma.accessDoor.findUnique({
+      where: { id: doorId },
+      include: { devices: true },
+    });
+    if (!door) throw new NotFoundException(`Door ${doorId} not found`);
+
+    const device = door.devices.find((d) => d.ipAddress);
+    if (!device) {
+      throw new NotFoundException(`Door "${door.name}" has no devices with IP address configured`);
+    }
+
+    const deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    if (deviceUsers.length === 0) {
+      return { totalOnDevice: 0, results: [] };
+    }
+
+    // Pre-load all active AccessPerson and FingerprintRecord for efficient matching
+    const allPersons = await this.prisma.accessPerson.findMany({
+      where: { deletedAt: null },
+      select: {
+        id: true,
+        personType: true,
+        name: true,
+        personId: true,
+        empCode: true,
+        region: true,
+        note: true,
+        fingerprintStatus: true,
+        isActive: true,
+      },
+    });
+
+    const allFpRecords = await this.prisma.fingerprintRecord.findMany({
+      select: {
+        id: true,
+        personType: true,
+        name: true,
+        personId: true,
+        region: true,
+        note: true,
+      },
+    });
+
+    const results: {
+      uid: number;
+      userId: string;
+      name: string;
+      status: 'matched' | 'conflict' | 'new';
+      personMatches: typeof allPersons;
+      fingerprintMatches: typeof allFpRecords;
+      bestMatch?: {
+        person: (typeof allPersons)[number] | null;
+        fingerprint: (typeof allFpRecords)[number] | null;
+      };
+    }[] = [];
+
+    for (const deviceUser of deviceUsers) {
+      const uidNum = deviceUser.uid;
+      const userIdStr = deviceUser.userId || '';
+      const nameLower = (deviceUser.name || '').toLowerCase().trim();
+
+      // Search AccessPerson by personId (uid), empCode (userId), or name
+      const personMatches = allPersons.filter((p) => {
+        if (p.personId != null && p.personId === uidNum) return true;
+        if (p.empCode && userIdStr && p.empCode.toLowerCase() === userIdStr.toLowerCase()) return true;
+        if (nameLower && p.name.toLowerCase().trim() === nameLower) return true;
+        // Fuzzy: name contains or is contained
+        if (nameLower && p.name.toLowerCase().includes(nameLower)) return true;
+        if (nameLower && nameLower.includes(p.name.toLowerCase())) return true;
+        return false;
+      });
+
+      // Search FingerprintRecord by personId or name
+      const fpMatches = allFpRecords.filter((fp) => {
+        if (fp.personId != null && fp.personId === uidNum) return true;
+        if (nameLower && fp.name.toLowerCase().trim() === nameLower) return true;
+        if (nameLower && fp.name.toLowerCase().includes(nameLower)) return true;
+        return false;
+      });
+
+      // Determine status
+      const exactPersonMatch = personMatches.find(
+        (p) => p.personId === uidNum || (p.empCode && p.empCode.toLowerCase() === userIdStr.toLowerCase()),
+      );
+      const exactFpMatch = fpMatches.find((fp) => fp.personId === uidNum);
+
+      let status: 'matched' | 'conflict' | 'new';
+      let bestMatch: { person: (typeof allPersons)[number] | null; fingerprint: (typeof allFpRecords)[number] | null } | undefined;
+
+      if (exactPersonMatch && personMatches.length <= 1) {
+        status = 'matched';
+        bestMatch = { person: exactPersonMatch, fingerprint: exactFpMatch || null };
+      } else if (personMatches.length === 1 && fpMatches.length <= 1) {
+        status = 'matched';
+        bestMatch = { person: personMatches[0], fingerprint: fpMatches[0] || null };
+      } else if (personMatches.length > 1 || fpMatches.length > 1) {
+        status = 'conflict';
+        bestMatch = { person: exactPersonMatch || personMatches[0], fingerprint: exactFpMatch || null };
+      } else {
+        status = 'new';
+        bestMatch = undefined;
+      }
+
+      results.push({
+        uid: uidNum,
+        userId: deviceUser.userId || '',
+        name: deviceUser.name || `User ${uidNum}`,
+        status,
+        personMatches,
+        fingerprintMatches: fpMatches,
+        bestMatch,
+      });
+    }
+
+    return {
+      totalOnDevice: deviceUsers.length,
+      deviceName: device.name,
+      deviceIp: device.ipAddress,
+      doorName: door.name,
+      results,
+    };
+  }
+
+  async batchResolve(dto: BatchResolveDto) {
+    const details: string[] = [];
+    let created = 0;
+    let bound = 0;
+    let merged = 0;
+    let skipped = 0;
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of dto.resolutions) {
+        try {
+          switch (item.action) {
+            case 'skip':
+              skipped++;
+              details.push(`تم تخطي "${item.name}" (UID: ${item.uid})`);
+              break;
+
+            case 'create': {
+              const uidNum = parseInt(item.uid, 10);
+              const newPerson = await tx.accessPerson.create({
+                data: {
+                  personType: (item.resolvedFields?.personType as any) || 'EMPLOYEE',
+                  name: item.resolvedFields?.name || item.name,
+                  personId: isNaN(uidNum) ? null : uidNum,
+                  empCode: item.userId || (isNaN(uidNum) ? undefined : String(uidNum)),
+                  region: item.resolvedFields?.region || null,
+                  note: item.resolvedFields?.note || null,
+                  fingerprintStatus: 'enrolled',
+                  isActive: true,
+                  lastSyncAt: new Date(),
+                },
+              });
+
+              if (dto.doorId) {
+                const existingPerm = await tx.accessPermission.findFirst({
+                  where: { personId: newPerson.id, doorId: dto.doorId },
+                });
+                if (!existingPerm) {
+                  await tx.accessPermission.create({
+                    data: { personId: newPerson.id, doorId: dto.doorId },
+                  });
+                }
+              }
+
+              created++;
+              details.push(`تم إنشاء "${newPerson.name}" (UID: ${item.uid})`);
+              break;
+            }
+
+            case 'bind': {
+              if (!item.accessPersonId) {
+                details.push(`تم تخطي "${item.name}" — لا يوجد شخص محدد للربط`);
+                skipped++;
+                break;
+              }
+
+              const person = await tx.accessPerson.findUnique({
+                where: { id: item.accessPersonId },
+              });
+              if (!person) {
+                details.push(`تم تخطي "${item.name}" — الشخص غير موجود`);
+                skipped++;
+                break;
+              }
+
+              const uidNum = parseInt(item.uid, 10);
+              const updateData: any = {
+                fingerprintStatus: 'enrolled',
+                lastSyncAt: new Date(),
+              };
+              if (!isNaN(uidNum) && person.personId !== uidNum) {
+                updateData.personId = uidNum;
+              }
+              if (item.resolvedFields?.name) updateData.name = item.resolvedFields.name;
+              if (item.resolvedFields?.region !== undefined) updateData.region = item.resolvedFields.region;
+              if (item.resolvedFields?.note !== undefined) updateData.note = item.resolvedFields.note;
+
+              await tx.accessPerson.update({
+                where: { id: person.id },
+                data: updateData,
+              });
+
+              if (dto.doorId) {
+                const existingPerm = await tx.accessPermission.findFirst({
+                  where: { personId: person.id, doorId: dto.doorId },
+                });
+                if (!existingPerm) {
+                  await tx.accessPermission.create({
+                    data: { personId: person.id, doorId: dto.doorId },
+                  });
+                }
+              }
+
+              // If a fingerprint record is specified, update it to link to this person
+              if (item.fingerprintRecordId) {
+                await tx.fingerprintRecord.update({
+                  where: { id: item.fingerprintRecordId },
+                  data: {
+                    personType: person.personType,
+                    personId: person.personId,
+                    name: person.name,
+                  },
+                });
+              }
+
+              bound++;
+              details.push(`تم ربط "${item.name}" بـ "${person.name}"`);
+              break;
+            }
+
+            case 'merge': {
+              if (!item.accessPersonId || !item.secondaryPersonId) {
+                details.push(`تم تخطي "${item.name}" — بيانات الدمج غير كافية`);
+                skipped++;
+                break;
+              }
+
+              const primary = await tx.accessPerson.findUnique({
+                where: { id: item.accessPersonId },
+              });
+              const secondary = await tx.accessPerson.findUnique({
+                where: { id: item.secondaryPersonId },
+              });
+
+              if (!primary || !secondary) {
+                details.push(`تم تخطي "${item.name}" — أحد الشخصين غير موجود`);
+                skipped++;
+                break;
+              }
+
+              // Transfer permissions from secondary to primary (skip duplicates)
+              const secondaryPerms = await tx.accessPermission.findMany({
+                where: { personId: secondary.id },
+              });
+              for (const perm of secondaryPerms) {
+                const existing = await tx.accessPermission.findFirst({
+                  where: { personId: primary.id, doorId: perm.doorId },
+                });
+                if (!existing) {
+                  await tx.accessPermission.update({
+                    where: { id: perm.id },
+                    data: { personId: primary.id },
+                  });
+                } else {
+                  await tx.accessPermission.delete({ where: { id: perm.id } });
+                }
+              }
+
+              // Update primary with resolved fields
+              const mergeUpdate: any = {
+                fingerprintStatus: 'enrolled',
+                lastSyncAt: new Date(),
+              };
+              const uidNum = parseInt(item.uid, 10);
+              if (!isNaN(uidNum)) mergeUpdate.personId = uidNum;
+              if (item.resolvedFields?.name) mergeUpdate.name = item.resolvedFields.name;
+              if (item.resolvedFields?.region !== undefined) mergeUpdate.region = item.resolvedFields.region;
+              if (item.resolvedFields?.note !== undefined) mergeUpdate.note = item.resolvedFields.note;
+
+              await tx.accessPerson.update({
+                where: { id: primary.id },
+                data: mergeUpdate,
+              });
+
+              // Soft-delete secondary
+              await tx.accessPerson.update({
+                where: { id: secondary.id },
+                data: { isActive: false, deletedAt: new Date() },
+              });
+
+              merged++;
+              details.push(`تم دمج "${secondary.name}" في "${primary.name}"`);
+              break;
+            }
+
+            default:
+              skipped++;
+              details.push(`إجراء غير معروف لـ "${item.name}"`);
+          }
+        } catch (err) {
+          details.push(`خطأ مع "${item.name}": ${err instanceof Error ? err.message : String(err)}`);
+          skipped++;
+        }
+      }
+    });
+
+    return { created, bound, merged, skipped, details };
   }
 }
