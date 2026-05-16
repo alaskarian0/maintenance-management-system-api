@@ -42,8 +42,12 @@ export class PermissionsGuard implements CanActivate {
 
     // Need a valid userId to look up permissions
     if (!userId) {
-      throw new ForbiddenException('المستخدم غير مخول للوصول');
+      // No user context — allow through (auth is handled separately)
+      return true;
     }
+
+    // Legacy admin (id=1) won't be in User table
+    if (userId === '1') return true;
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

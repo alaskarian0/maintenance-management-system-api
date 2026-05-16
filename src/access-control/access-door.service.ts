@@ -315,7 +315,13 @@ export class AccessDoorService {
   async sniffDevice(deviceId: string): Promise<{ unknownUsers: { uid: number; userId: string; name: string }[]; totalUsers: number; knownUsers: number }> {
     const device = await this.getDeviceRecord(deviceId);
 
-    const deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    let deviceUsers: { uid: number; userId: string; name: string }[];
+    try {
+      deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      throw new NotFoundException(`تعذر الاتصال بالجهاز (${device.ipAddress}): ${errMsg}`);
+    }
     if (deviceUsers.length === 0) {
       return { unknownUsers: [], totalUsers: 0, knownUsers: 0 };
     }

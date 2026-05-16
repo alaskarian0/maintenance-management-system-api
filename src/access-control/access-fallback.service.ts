@@ -78,21 +78,16 @@ export class AccessFallbackService {
   }
 
   async getDeviceUsers(ip: string): Promise<DeviceUserInfo[]> {
-    try {
-      const ZKAttendanceClient = require('zk-attendance-sdk');
-      const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
-      await client.createSocket();
-      const users = await client.getUsers();
-      await client.disconnect();
-      return (users?.data || []).map((u: any) => ({
-        uid: u.uid || 0,
-        userId: u.userId || String(u.uid),
-        name: u.name || '',
-      }));
-    } catch (err) {
-      this.logger.warn(`Failed to get users from ${ip}: ${this.errMsg(err)}`);
-      return [];
-    }
+    const ZKAttendanceClient = require('zk-attendance-sdk');
+    const client = new ZKAttendanceClient(ip, 4370, 5000, 5000);
+    await client.createSocket();
+    const users = await client.getUsers();
+    await client.disconnect();
+    return (users?.data || []).map((u: any) => ({
+      uid: u.uid || 0,
+      userId: u.userId || String(u.uid),
+      name: u.name || '',
+    }));
   }
 
   async checkUserOnDevice(ip: string, uid: number, empCode?: string): Promise<{ exists: boolean; name?: string; role?: number }> {

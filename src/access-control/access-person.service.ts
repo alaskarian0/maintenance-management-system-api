@@ -413,7 +413,14 @@ export class AccessPersonService {
       throw new NotFoundException(`Door "${door.name}" has no devices with IP address configured`);
     }
 
-    const deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    let deviceUsers: { uid: number; userId: string; name: string }[];
+    try {
+      deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      details.push(`تعذر الاتصال بالجهاز "${device.name}" (${device.ipAddress}): ${errMsg}`);
+      return { synced: 0, created: 0, updated: 0, details };
+    }
     if (deviceUsers.length === 0) {
       details.push(`لا يوجد مستخدمين على الجهاز ${device.ipAddress}`);
       return { synced: 0, created: 0, updated: 0, details };
@@ -552,21 +559,43 @@ export class AccessPersonService {
   // ── Device User Resolution ──────────────────────────────────────
 
   async resolveDeviceUsers(doorId: string) {
+    this.logger.log(`resolveDeviceUsers called for doorId=${doorId}`);
+
     const door = await this.prisma.accessDoor.findUnique({
       where: { id: doorId },
       include: { devices: true },
     });
     if (!door) throw new NotFoundException(`Door ${doorId} not found`);
 
+    this.logger.log(`Door "${door.name}" has ${door.devices.length} device(s): ${door.devices.map(d => `${d.name}(${d.ipAddress ?? 'no-ip'}, state=${d.state})`).join(', ')}`);
+
     const device = door.devices.find((d) => d.ipAddress);
     if (!device) {
-      throw new NotFoundException(`Door "${door.name}" has no devices with IP address configured`);
+      this.logger.warn(`Door "${door.name}" has no devices with IP address. Devices: ${JSON.stringify(door.devices.map(d => ({ id: d.id, name: d.name, ip: d.ipAddress })))}`);
+      throw new NotFoundException(`الباب "${door.name}" لا يحتوي على أجهزة بعنوان IP مُعد. تأكد من إعداد عنوان IP للجهاز المرتبط بهذا الباب.`);
     }
 
-    const deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
-    if (deviceUsers.length === 0) {
-      return { totalOnDevice: 0, results: [] };
+    this.logger.log(`Querying device "${device.name}" at ${device.ipAddress} (state=${device.state}) for users...`);
+
+    let deviceUsers: { uid: number; userId: string; name: string }[];
+    try {
+      deviceUsers = await this.fallback.getDeviceUsers(device.ipAddress!);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to connect to device "${device.name}" (${device.ipAddress}): ${errMsg}`);
+      throw new NotFoundException(
+        `تعذر الاتصال بالجهاز "${device.name}" (${device.ipAddress}). ` +
+        `تأكد أن الجهاز يعمل ومتصل بالشبكة. ` +
+        `الخطأ: ${errMsg}`,
+      );
     }
+
+    if (deviceUsers.length === 0) {
+      this.logger.log(`Device "${device.name}" (${device.ipAddress}) returned 0 users — device is online but empty`);
+      return { totalOnDevice: 0, deviceName: device.name, deviceIp: device.ipAddress, doorName: door.name, results: [] };
+    }
+
+    this.logger.log(`Device "${device.name}" returned ${deviceUsers.length} users`);
 
     // Pre-load all active AccessPerson and FingerprintRecord for efficient matching
     const allPersons = await this.prisma.accessPerson.findMany({
