@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateAdminLetterDto } from './dto/create-admin-letter.dto';
 import { UpdateAdminLetterDto } from './dto/update-admin-letter.dto';

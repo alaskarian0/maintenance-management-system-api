@@ -226,7 +226,7 @@ export class AccessPersonController {
 
   @Post()
   create(@Body() dto: CreatePersonDto) {
-    return this.personService.create(dto);
+    return this.personService.create(dto as any);
   }
 
   @Patch(':id')

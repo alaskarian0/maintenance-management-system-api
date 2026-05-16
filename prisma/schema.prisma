@@ -319,6 +319,7 @@ model AccessDoor {
   id           String     @id @default(cuid())
   name         String
   location     String?
+  doorNumber   Int        @default(0)
   group        DoorGroup?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -356,6 +357,7 @@ model AccessPerson {
   identifier       String?               // External ID from source system (employee seq, resident id, HR code)
   region           String?
   note             String?
+  dataWarning      String?               // Warning message for data quality issues (unclear door access, missing info, etc.)
   phone            String?
   accessType       String                @default("permanent")
   accessEndDate    DateTime?

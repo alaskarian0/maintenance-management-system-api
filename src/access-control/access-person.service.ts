@@ -124,7 +124,7 @@ export class AccessPersonService {
   }
 
   async create(data: {
-    personType: 'EMPLOYEE' | 'RESIDENT';
+    personType: 'EMPLOYEE' | 'RESIDENT' | 'OTHER';
     name: string;
     personId?: number;
     empCode?: string;
@@ -141,6 +141,7 @@ export class AccessPersonService {
     hireDate?: string;
     role?: 'user' | 'admin';
     photoUrl?: string;
+    dataWarning?: string;
   }) {
     const createData: any = { ...data };
     if (data.accessEndDate) {
@@ -152,6 +153,16 @@ export class AccessPersonService {
     if (data.hireDate) {
       createData.hireDate = new Date(data.hireDate);
     }
+
+    // Auto-generate empCode if not provided
+    if (!createData.empCode) {
+      const typeLetter = data.personType === 'EMPLOYEE' ? 'm'
+        : data.personType === 'RESIDENT' ? 's' : 'o';
+      const count = await this.prisma.accessPerson.count();
+      const nextNum = count + 1;
+      createData.empCode = `${typeLetter}${nextNum}`;
+    }
+
     return this.prisma.accessPerson.create({ data: createData });
   }
 
@@ -161,7 +172,7 @@ export class AccessPersonService {
       name?: string; empCode?: string; identifier?: string; region?: string; note?: string; phone?: string;
       isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string;
       birthDate?: string; courtNumber?: string; departmentId?: string; unitId?: string;
-      hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string;
+      hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string; dataWarning?: string;
     },
   ) {
     const person = await this.prisma.accessPerson.findUnique({ where: { id } });
@@ -182,6 +193,9 @@ export class AccessPersonService {
     }
     if (data.unitId !== undefined) {
       updateData.unitId = data.unitId || null;
+    }
+    if (data.dataWarning !== undefined) {
+      updateData.dataWarning = data.dataWarning || null;
     }
 
     const wasActive = person.isActive;

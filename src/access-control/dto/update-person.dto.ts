@@ -15,4 +15,5 @@ export class UpdatePersonDto {
   hireDate?: string;
   role?: 'user' | 'admin';
   photoUrl?: string;
+  dataWarning?: string;
 }

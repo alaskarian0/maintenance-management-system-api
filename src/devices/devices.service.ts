@@ -270,7 +270,7 @@ export class DevicesService {
     if (dto.status !== undefined) {
       data.status = dto.status;
       if (dto.status === 'AVAILABLE') {
-        data.assignment = { deleteMany: {} };
+        data.assignment = { delete: true };
       }
     }
 

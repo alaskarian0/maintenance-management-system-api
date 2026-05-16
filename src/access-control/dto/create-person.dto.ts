@@ -16,4 +16,5 @@ export class CreatePersonDto {
   hireDate?: string;
   role?: 'user' | 'admin';
   photoUrl?: string;
+  dataWarning?: string;
 }
