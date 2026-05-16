@@ -31,6 +31,7 @@ export class AccessPersonService {
       search,
       personType,
       isActive,
+      doorId,
       page = '1',
       limit = '20',
     } = query;
@@ -55,6 +56,16 @@ export class AccessPersonService {
         { identifier: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search, mode: 'insensitive' } },
       ];
+    }
+    if (doorId) {
+      where.permissions = { some: { doorId } };
+    } else if (query.doorIds) {
+      const ids = query.doorIds.split(',').map((s) => s.trim()).filter(Boolean);
+      if (ids.length === 1) {
+        where.permissions = { some: { doorId: ids[0] } };
+      } else if (ids.length > 1) {
+        where.permissions = { some: { doorId: { in: ids } } };
+      }
     }
 
     const [data, total] = await Promise.all([

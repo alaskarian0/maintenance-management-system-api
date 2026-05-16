@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateAdminLetterDto } from './dto/create-admin-letter.dto';
 import { UpdateAdminLetterDto } from './dto/update-admin-letter.dto';
@@ -9,11 +9,70 @@ import * as path from 'path';
 @Injectable()
 export class AdminLettersService {
   private readonly uploadDir = path.join(process.cwd(), 'uploads', 'admin-letters');
+  private readonly logger = new Logger(AdminLettersService.name);
 
   constructor(private prisma: PrismaService) {
     if (!fs.existsSync(this.uploadDir)) {
       fs.mkdirSync(this.uploadDir, { recursive: true });
     }
+  }
+
+  private async enrichPersonsWithAccessStatus(persons: any[]) {
+    const accessPersons = await this.prisma.accessPerson.findMany({
+      where: {
+        deletedAt: null,
+        OR: persons
+          .filter((p) => p.personId != null)
+          .map((p) => ({
+            personType: p.personType,
+            personId: p.personId,
+          })),
+      },
+      select: {
+        id: true,
+        personType: true,
+        personId: true,
+        isActive: true,
+        accessType: true,
+        accessEndDate: true,
+        name: true,
+        permissions: {
+          select: {
+            doorId: true,
+            door: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const accessMap = new Map<string, (typeof accessPersons)[number]>();
+    for (const ap of accessPersons) {
+      accessMap.set(`${ap.personType}:${ap.personId}`, ap);
+    }
+
+    return persons.map((p) => {
+      const key = p.personId != null ? `${p.personType}:${p.personId}` : null;
+      const accessPerson = key ? accessMap.get(key) : null;
+
+      let accessStatus: 'registered_active' | 'registered_inactive' | 'not_registered';
+      if (!accessPerson) {
+        accessStatus = 'not_registered';
+      } else if (accessPerson.isActive) {
+        accessStatus = 'registered_active';
+      } else {
+        accessStatus = 'registered_inactive';
+      }
+
+      return {
+        ...p,
+        accessStatus,
+        accessPersonId: accessPerson?.id ?? null,
+        accessPersonIsActive: accessPerson?.isActive ?? null,
+        accessType: accessPerson?.accessType ?? null,
+        accessEndDate: accessPerson?.accessEndDate ?? null,
+        permissionCount: accessPerson?.permissions?.length ?? 0,
+      };
+    });
   }
 
   async findAll(params: { page: number; limit: number; search?: string }) {
@@ -56,12 +115,21 @@ export class AdminLettersService {
   }
 
   async findOne(id: string) {
-    return this.prisma.adminLetter.findUnique({
+    const letter = await this.prisma.adminLetter.findUnique({
       where: { id },
       include: {
         persons: { orderBy: { createdAt: 'desc' } },
       },
     });
+
+    if (!letter) return null;
+
+    const enrichedPersons = await this.enrichPersonsWithAccessStatus(letter.persons);
+
+    return {
+      ...letter,
+      persons: enrichedPersons,
+    };
   }
 
   async create(dto: CreateAdminLetterDto, file: Express.Multer.File) {
@@ -212,5 +280,109 @@ export class AdminLettersService {
     }
 
     return counts;
+  }
+
+  async togglePersonAccess(letterPersonId: string) {
+    const letterPerson = await this.prisma.adminLetterPerson.findUnique({
+      where: { id: letterPersonId },
+    });
+    if (!letterPerson) {
+      throw new NotFoundException('Person link not found');
+    }
+
+    if (letterPerson.personId == null) {
+      throw new BadRequestException('لا يمكن التحكم بالوصول: الشخص ليس لديه رقم تعريف (personId)');
+    }
+
+    const accessPerson = await this.prisma.accessPerson.findFirst({
+      where: {
+        personType: letterPerson.personType as any,
+        personId: letterPerson.personId,
+        deletedAt: null,
+      },
+    });
+
+    if (!accessPerson) {
+      throw new NotFoundException('الشخص غير مسجّل في نظام التحكم بالدخول');
+    }
+
+    const newActiveState = !accessPerson.isActive;
+
+    const updated = await this.prisma.accessPerson.update({
+      where: { id: accessPerson.id },
+      data: { isActive: newActiveState },
+    });
+
+    this.logger.log(
+      `Access toggled for "${accessPerson.name}" (${accessPerson.id}): ${newActiveState ? 'active' : 'inactive'}`,
+    );
+
+    return {
+      success: true,
+      accessPersonId: updated.id,
+      isActive: updated.isActive,
+      personName: updated.name,
+      action: newActiveState ? 'activated' : 'deactivated',
+    };
+  }
+
+  async bulkToggleAccess(letterId: string, activate: boolean) {
+    const letter = await this.prisma.adminLetter.findUnique({
+      where: { id: letterId },
+      include: { persons: true },
+    });
+    if (!letter) {
+      throw new NotFoundException('Letter not found');
+    }
+
+    const persons = letter.persons.filter((p) => p.personId != null);
+    if (persons.length === 0) {
+      return {
+        success: true,
+        updated: 0,
+        skipped: letter.persons.length,
+        message: 'لا يوجد أشخاص بأرقام تعريف للتحكم بهم',
+      };
+    }
+
+    const accessPersons = await this.prisma.accessPerson.findMany({
+      where: {
+        deletedAt: null,
+        OR: persons.map((p) => ({
+          personType: p.personType,
+          personId: p.personId!,
+        })),
+      },
+    });
+
+    let updated = 0;
+    let skipped = 0;
+
+    for (const accessPerson of accessPersons) {
+      if (accessPerson.isActive === activate) {
+        skipped++;
+        continue;
+      }
+
+      await this.prisma.accessPerson.update({
+        where: { id: accessPerson.id },
+        data: { isActive: activate },
+      });
+      updated++;
+    }
+
+    const notFound = persons.length - accessPersons.length;
+
+    this.logger.log(
+      `Bulk access toggle for letter ${letterId}: ${updated} updated, ${skipped} skipped, ${notFound} not found in access system`,
+    );
+
+    return {
+      success: true,
+      updated,
+      skipped,
+      notFound,
+      action: activate ? 'activated' : 'deactivated',
+    };
   }
 }

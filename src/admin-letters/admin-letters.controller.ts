@@ -4,6 +4,7 @@ import {
   Post,
   Put,
   Delete,
+  Patch,
   Param,
   Body,
   Query,
@@ -156,5 +157,21 @@ export class AdminLettersController {
   ) {
     await this.service.removePerson(id, personLinkId);
     return { success: true };
+  }
+
+  @Patch(':id/persons/:personLinkId/toggle-access')
+  async togglePersonAccess(
+    @Param('id') id: string,
+    @Param('personLinkId') personLinkId: string,
+  ) {
+    return this.service.togglePersonAccess(personLinkId);
+  }
+
+  @Patch(':id/toggle-all-access')
+  async bulkToggleAccess(
+    @Param('id') id: string,
+    @Body() body: { activate: boolean },
+  ) {
+    return this.service.bulkToggleAccess(id, body.activate);
   }
 }
