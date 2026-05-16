@@ -9,6 +9,7 @@ import {
   Query,
   NotFoundException,
   UseInterceptors,
+  UseGuards,
   UploadedFile,
   BadRequestException,
 } from '@nestjs/common';
@@ -23,8 +24,12 @@ import { UpdatePersonDto } from './dto/update-person.dto';
 import { QueryPersonDto } from './dto/query-person.dto';
 import { EnrollFingerprintDto } from './dto/enroll-fingerprint.dto';
 import { PrismaService } from '../prisma.service';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/persons')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class AccessPersonController {
   constructor(
     private readonly personService: AccessPersonService,

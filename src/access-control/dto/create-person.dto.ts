@@ -1,5 +1,5 @@
 export class CreatePersonDto {
-  personType: 'EMPLOYEE' | 'RESIDENT';
+  personType: 'EMPLOYEE' | 'RESIDENT' | 'OTHER';
   name: string;
   personId?: number;
   empCode?: string;
@@ -13,7 +13,6 @@ export class CreatePersonDto {
   courtNumber?: string;
   departmentId?: string;
   unitId?: string;
-  address?: string;
   hireDate?: string;
   role?: 'user' | 'admin';
   photoUrl?: string;

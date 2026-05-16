@@ -6,10 +6,15 @@ import {
   Param,
   Body,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { AccessPermissionService } from './access-permission.service';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/permissions')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class AccessPermissionController {
   constructor(private readonly permService: AccessPermissionService) {}
 

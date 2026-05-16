@@ -35,6 +35,9 @@ export class AuthController {
       if (user && user.isActive) {
         const match = await bcrypt.compare(password, user.passwordHash);
         if (match) {
+          const permissions = Array.isArray(user.permissions)
+            ? user.permissions
+            : [];
           return {
             status: 'success' as const,
             data: {
@@ -45,6 +48,7 @@ export class AuthController {
                 fullName: user.fullName,
                 role: user.role,
                 isTempPass: false,
+                permissions,
               },
             },
           };
@@ -70,6 +74,7 @@ export class AuthController {
           fullName: 'مسؤول النظام',
           role: 'ADMIN',
           isTempPass: false,
+          permissions: ['ACCESS_CONTROL', 'DEVICE_IMPORT'],
         },
       },
     };

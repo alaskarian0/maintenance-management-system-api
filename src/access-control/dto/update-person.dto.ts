@@ -12,7 +12,6 @@ export class UpdatePersonDto {
   courtNumber?: string;
   departmentId?: string;
   unitId?: string;
-  address?: string;
   hireDate?: string;
   role?: 'user' | 'admin';
   photoUrl?: string;

@@ -6,12 +6,17 @@ import {
   Delete,
   Param,
   Body,
+  UseGuards,
 } from '@nestjs/common';
 import { ShiftClassService } from './shift-class.service';
 import { CreateShiftClassDto } from './dto/create-shift-class.dto';
 import { UpdateShiftClassDto } from './dto/update-shift-class.dto';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/shift-classes')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class ShiftClassController {
   constructor(private readonly shiftClassService: ShiftClassService) {}
 

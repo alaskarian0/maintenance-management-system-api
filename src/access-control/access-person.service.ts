@@ -137,7 +137,6 @@ export class AccessPersonService {
     courtNumber?: string;
     departmentId?: string;
     unitId?: string;
-    address?: string;
     hireDate?: string;
     role?: 'user' | 'admin';
     photoUrl?: string;
@@ -161,7 +160,7 @@ export class AccessPersonService {
       name?: string; empCode?: string; identifier?: string; region?: string; note?: string; phone?: string;
       isActive?: boolean; accessType?: 'permanent' | 'temporary'; accessEndDate?: string;
       birthDate?: string; courtNumber?: string; departmentId?: string; unitId?: string;
-      address?: string; hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string;
+      hireDate?: string; role?: 'user' | 'admin'; photoUrl?: string;
     },
   ) {
     const person = await this.prisma.accessPerson.findUnique({ where: { id } });

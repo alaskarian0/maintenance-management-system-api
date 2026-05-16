@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  UseGuards,
 } from '@nestjs/common';
 import { AccessDoorService } from './access-door.service';
 import { AccessSyncScheduler } from './access-sync.scheduler';
@@ -13,8 +14,12 @@ import { CreateDoorDto } from './dto/create-door.dto';
 import { UpdateDoorDto } from './dto/update-door.dto';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/doors')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class AccessDoorController {
   constructor(
     private readonly doorService: AccessDoorService,

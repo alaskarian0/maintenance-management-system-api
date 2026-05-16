@@ -1,7 +1,11 @@
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { AccessLogService } from './access-log.service';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/logs')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class AccessLogController {
   constructor(private readonly logService: AccessLogService) {}
 

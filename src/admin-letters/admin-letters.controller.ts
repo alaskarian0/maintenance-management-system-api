@@ -10,6 +10,7 @@ import {
   Query,
   Res,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
   BadRequestException,
   NotFoundException,
@@ -21,10 +22,14 @@ import { AdminLettersService } from './admin-letters.service';
 import { CreateAdminLetterDto } from './dto/create-admin-letter.dto';
 import { UpdateAdminLetterDto } from './dto/update-admin-letter.dto';
 import { AddLetterPersonDto } from './dto/add-letter-person.dto';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
 @Controller('admin-letters')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class AdminLettersController {
   constructor(private readonly service: AdminLettersService) {}
 

@@ -6,11 +6,16 @@ import {
   Param,
   Body,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { UserTempScheduleService } from './user-temp-schedule.service';
 import { CreateUserTempScheduleDto, CreateBatchUserTempScheduleDto } from './dto/create-user-temp-schedule.dto';
+import { PermissionsGuard } from '../common/permissions/permissions.guard';
+import { RequirePermissions } from '../common/permissions/require-permissions.decorator';
 
 @Controller('access-control/temp-schedules')
+@UseGuards(PermissionsGuard)
+@RequirePermissions('ACCESS_CONTROL')
 export class UserTempScheduleController {
   constructor(private readonly scheduleService: UserTempScheduleService) {}
 
