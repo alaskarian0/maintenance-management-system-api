@@ -87,8 +87,11 @@ export class AccessPersonController {
   }
 
   @Post('resolve-device-users/:doorId')
-  resolveDeviceUsers(@Param('doorId') doorId: string) {
-    return this.personService.resolveDeviceUsers(doorId);
+  resolveDeviceUsers(
+    @Param('doorId') doorId: string,
+    @Body() body: { deviceId?: string } | undefined,
+  ) {
+    return this.personService.resolveDeviceUsers(doorId, body?.deviceId);
   }
 
   @Post('batch-resolve')

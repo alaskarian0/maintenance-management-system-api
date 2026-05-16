@@ -72,7 +72,10 @@ export class AccessPersonService {
     const [data, total] = await Promise.all([
       this.prisma.accessPerson.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [
+          { dataWarning: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'desc' },
+        ],
         include: {
           _count: { select: { permissions: true, fingerprintTemplates: true, faceTemplates: true } },
           permissions: {
@@ -558,8 +561,8 @@ export class AccessPersonService {
 
   // ── Device User Resolution ──────────────────────────────────────
 
-  async resolveDeviceUsers(doorId: string) {
-    this.logger.log(`resolveDeviceUsers called for doorId=${doorId}`);
+  async resolveDeviceUsers(doorId: string, deviceId?: string) {
+    this.logger.log(`resolveDeviceUsers called for doorId=${doorId}, deviceId=${deviceId || 'auto'}`);
 
     const door = await this.prisma.accessDoor.findUnique({
       where: { id: doorId },
@@ -569,10 +572,16 @@ export class AccessPersonService {
 
     this.logger.log(`Door "${door.name}" has ${door.devices.length} device(s): ${door.devices.map(d => `${d.name}(${d.ipAddress ?? 'no-ip'}, state=${d.state})`).join(', ')}`);
 
-    const device = door.devices.find((d) => d.ipAddress);
+    // If deviceId is provided, use that specific device; otherwise fall back to first with IP
+    const device = deviceId
+      ? door.devices.find((d) => d.id === deviceId)
+      : door.devices.find((d) => d.ipAddress);
     if (!device) {
-      this.logger.warn(`Door "${door.name}" has no devices with IP address. Devices: ${JSON.stringify(door.devices.map(d => ({ id: d.id, name: d.name, ip: d.ipAddress })))}`);
-      throw new NotFoundException(`الباب "${door.name}" لا يحتوي على أجهزة بعنوان IP مُعد. تأكد من إعداد عنوان IP للجهاز المرتبط بهذا الباب.`);
+      this.logger.warn(`Device not found. Requested deviceId=${deviceId}, available: ${JSON.stringify(door.devices.map(d => ({ id: d.id, name: d.name, ip: d.ipAddress })))}`);
+      throw new NotFoundException(`الجهاز غير موجود على هذا الباب. تأكد من اختيار الجهاز الصحيح.`);
+    }
+    if (!device.ipAddress) {
+      throw new NotFoundException(`الجهاز "${device.name}" لا يحتوي على عنوان IP مُعد.`);
     }
 
     this.logger.log(`Querying device "${device.name}" at ${device.ipAddress} (state=${device.state}) for users...`);
