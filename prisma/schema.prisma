@@ -197,6 +197,7 @@ enum DeviceSide {
 enum FingerprintPersonType {
   EMPLOYEE
   RESIDENT
+  OTHER
 }
 
 model FingerprintRecord {

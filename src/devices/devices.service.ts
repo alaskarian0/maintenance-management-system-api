@@ -267,6 +267,12 @@ export class DevicesService {
     if (dto.supplier !== undefined) data.supplier = dto.supplier;
     if (dto.contractDetails !== undefined)
       data.contractDetails = dto.contractDetails;
+    if (dto.status !== undefined) {
+      data.status = dto.status;
+      if (dto.status === 'AVAILABLE') {
+        data.assignment = { deleteMany: {} };
+      }
+    }
 
     const updated = await this.prisma.deviceItem.update({
       where: { id: itemId },

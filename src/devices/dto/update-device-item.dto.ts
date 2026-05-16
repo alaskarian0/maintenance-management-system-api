@@ -3,4 +3,5 @@ export class UpdateDeviceItemDto {
   purchaseDate?: string | null;
   supplier?: string | null;
   contractDetails?: string | null;
+  status?: 'AVAILABLE' | 'ASSIGNED' | 'DEFECTIVE';
 }
