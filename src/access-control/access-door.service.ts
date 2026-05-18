@@ -160,68 +160,82 @@ export class AccessDoorService {
     const ip = device.ipAddress || device.name;
     const start = Date.now();
 
-    try {
+    // Race: HTTP check vs ZK TCP check in parallel for faster results
+    const httpCheck = async (): Promise<{ reachable: boolean; responseMs: number }> => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-      await fetch(`http://${ip}`, { signal: controller.signal });
-      clearTimeout(timeout);
-      const responseMs = Date.now() - start;
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      try {
+        await fetch(`http://${ip}`, { signal: controller.signal });
+        clearTimeout(timeout);
+        return { reachable: true, responseMs: Date.now() - start };
+      } catch {
+        clearTimeout(timeout);
+        return { reachable: false, responseMs: Date.now() - start };
+      }
+    };
 
+    const zkCheck = async (): Promise<{ reachable: boolean; responseMs: number }> => {
+      try {
+        const ZKAttendanceClient = require('zk-attendance-sdk');
+        const client = new ZKAttendanceClient(ip, 4370, 2000, 1500);
+        await client.createSocket();
+        await client.disconnect();
+        return { reachable: true, responseMs: Date.now() - start };
+      } catch {
+        return { reachable: false, responseMs: Date.now() - start };
+      }
+    };
+
+    // Run both checks in parallel, take the first success
+    const results = await Promise.all([httpCheck(), zkCheck()]);
+    const successResult = results.find(r => r.reachable);
+
+    if (successResult) {
       if (device.state !== 1) {
         await this.prisma.accessDevice.update({
           where: { id: deviceId },
           data: { state: 1, lastActivity: new Date() },
         });
       }
-
-      return { reachable: true, ip, responseMs, message: `Device reachable (${responseMs}ms)` };
-    } catch {
-      try {
-        const ZKAttendanceClient = require('zk-attendance-sdk');
-        const client = new ZKAttendanceClient(ip, 4370, 3000, 2000);
-        await client.createSocket();
-        await client.disconnect();
-        const tcpMs = Date.now() - start;
-
-        if (device.state !== 1) {
-          await this.prisma.accessDevice.update({
-            where: { id: deviceId },
-            data: { state: 1, lastActivity: new Date() },
-          });
-        }
-
-        return { reachable: true, ip, responseMs: tcpMs, message: `Device reachable via ZK port (${tcpMs}ms)` };
-      } catch {
-        if (device.state !== 3) {
-          await this.prisma.accessDevice.update({
-            where: { id: deviceId },
-            data: { state: 3 },
-          });
-        }
-
-        return { reachable: false, ip, responseMs: null, message: `Device not reachable (${ip})` };
-      }
+      return { reachable: true, ip, responseMs: successResult.responseMs, message: `Device reachable (${successResult.responseMs}ms)` };
     }
+
+    if (device.state !== 3) {
+      await this.prisma.accessDevice.update({
+        where: { id: deviceId },
+        data: { state: 3 },
+      });
+    }
+
+    return { reachable: false, ip, responseMs: null, message: `Device not reachable (${ip})` };
   }
 
   async pingAllDevices(): Promise<{ id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[]> {
     const devices = await this.prisma.accessDevice.findMany();
 
-    const results = await Promise.all(
-      devices.map(async (device) => {
-        const result = await this.pingDevice(device.id);
-        return {
-          id: device.id,
-          doorId: device.doorId,
-          name: device.name,
-          reachable: result.reachable,
-          ip: result.ip,
-          responseMs: result.responseMs,
-        };
-      }),
-    );
+    // Process in batches of 5 to avoid overwhelming the network
+    const BATCH_SIZE = 5;
+    const allResults: { id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[] = [];
 
-    return results;
+    for (let i = 0; i < devices.length; i += BATCH_SIZE) {
+      const batch = devices.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (device) => {
+          const result = await this.pingDevice(device.id);
+          return {
+            id: device.id,
+            doorId: device.doorId,
+            name: device.name,
+            reachable: result.reachable,
+            ip: result.ip,
+            responseMs: result.responseMs,
+          };
+        }),
+      );
+      allResults.push(...batchResults);
+    }
+
+    return allResults;
   }
 
   async discoverDeviceInfo(deviceId: string): Promise<{ serialNumber: string | null; firmware: string | null; deviceName: string | null } | null> {
