@@ -151,53 +151,58 @@ export class AccessDoorService {
 
   // ── Ping / Status ────────────────────────────────────────────────
 
+  /**
+   * Raw TCP port probe — just checks if the port accepts a connection.
+   * Much faster than ZK SDK handshake (ms vs seconds).
+   */
+  private tcpProbe(ip: string, port: number, timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const net = require('net');
+      const socket = new net.Socket();
+      const timer = setTimeout(() => {
+        socket.destroy();
+        resolve(false);
+      }, timeoutMs);
+
+      socket.connect(port, ip, () => {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(true);
+      });
+
+      socket.on('error', () => {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(false);
+      });
+    });
+  }
+
   async pingDevice(deviceId: string): Promise<{ reachable: boolean; ip: string; responseMs: number | null; message: string }> {
     const device = await this.prisma.accessDevice.findUnique({ where: { id: deviceId } });
     if (!device) {
       return { reachable: false, ip: '', responseMs: null, message: 'Device not found' };
     }
 
+    if (!device.ipAddress && !device.name) {
+      return { reachable: false, ip: '', responseMs: null, message: 'No IP address' };
+    }
+
     const ip = device.ipAddress || device.name;
     const start = Date.now();
 
-    // Race: HTTP check vs ZK TCP check in parallel for faster results
-    const httpCheck = async (): Promise<{ reachable: boolean; responseMs: number }> => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-      try {
-        await fetch(`http://${ip}`, { signal: controller.signal });
-        clearTimeout(timeout);
-        return { reachable: true, responseMs: Date.now() - start };
-      } catch {
-        clearTimeout(timeout);
-        return { reachable: false, responseMs: Date.now() - start };
-      }
-    };
+    // Quick TCP probe on ZK port 4370 (the most reliable for these devices)
+    const reachable = await this.tcpProbe(ip, 4370, 2000);
+    const responseMs = Date.now() - start;
 
-    const zkCheck = async (): Promise<{ reachable: boolean; responseMs: number }> => {
-      try {
-        const ZKAttendanceClient = require('zk-attendance-sdk');
-        const client = new ZKAttendanceClient(ip, 4370, 2000, 1500);
-        await client.createSocket();
-        await client.disconnect();
-        return { reachable: true, responseMs: Date.now() - start };
-      } catch {
-        return { reachable: false, responseMs: Date.now() - start };
-      }
-    };
-
-    // Run both checks in parallel, take the first success
-    const results = await Promise.all([httpCheck(), zkCheck()]);
-    const successResult = results.find(r => r.reachable);
-
-    if (successResult) {
+    if (reachable) {
       if (device.state !== 1) {
         await this.prisma.accessDevice.update({
           where: { id: deviceId },
           data: { state: 1, lastActivity: new Date() },
         });
       }
-      return { reachable: true, ip, responseMs: successResult.responseMs, message: `Device reachable (${successResult.responseMs}ms)` };
+      return { reachable: true, ip, responseMs, message: `Device reachable (${responseMs}ms)` };
     }
 
     if (device.state !== 3) {
@@ -213,29 +218,46 @@ export class AccessDoorService {
   async pingAllDevices(): Promise<{ id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[]> {
     const devices = await this.prisma.accessDevice.findMany();
 
-    // Process in batches of 5 to avoid overwhelming the network
-    const BATCH_SIZE = 5;
-    const allResults: { id: string; doorId: string; name: string; reachable: boolean; ip: string; responseMs: number | null }[] = [];
-
-    for (let i = 0; i < devices.length; i += BATCH_SIZE) {
-      const batch = devices.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map(async (device) => {
-          const result = await this.pingDevice(device.id);
+    // All in parallel — TCP probes are lightweight and fast (1-2s max per device)
+    const results = await Promise.all(
+      devices.map(async (device) => {
+        const ip = device.ipAddress || device.name;
+        if (!ip) {
           return {
             id: device.id,
             doorId: device.doorId,
             name: device.name,
-            reachable: result.reachable,
-            ip: result.ip,
-            responseMs: result.responseMs,
+            reachable: false,
+            ip: '',
+            responseMs: null,
           };
-        }),
-      );
-      allResults.push(...batchResults);
-    }
+        }
 
-    return allResults;
+        const start = Date.now();
+        const reachable = await this.tcpProbe(ip, 4370, 2000);
+        const responseMs = Date.now() - start;
+
+        // Update state
+        const newState = reachable ? 1 : 3;
+        if (device.state !== newState) {
+          await this.prisma.accessDevice.update({
+            where: { id: device.id },
+            data: reachable ? { state: 1, lastActivity: new Date() } : { state: 3 },
+          });
+        }
+
+        return {
+          id: device.id,
+          doorId: device.doorId,
+          name: device.name,
+          reachable,
+          ip,
+          responseMs: reachable ? responseMs : null,
+        };
+      }),
+    );
+
+    return results;
   }
 
   async discoverDeviceInfo(deviceId: string): Promise<{ serialNumber: string | null; firmware: string | null; deviceName: string | null } | null> {
