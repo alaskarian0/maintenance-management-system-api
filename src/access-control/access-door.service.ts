@@ -267,10 +267,13 @@ export class AccessDoorService {
     const info = await this.fallback.getDeviceInfo(device.ipAddress);
 
     if (info?.serialNumber && !device.serialNumber) {
-      await this.prisma.accessDevice.update({
-        where: { id: deviceId },
-        data: { serialNumber: info.serialNumber },
-      });
+      const cleanSerial = info.serialNumber.replace(/\0/g, '').trim();
+      if (cleanSerial) {
+        await this.prisma.accessDevice.update({
+          where: { id: deviceId },
+          data: { serialNumber: cleanSerial },
+        }).catch(() => {});
+      }
     }
 
     return info;
@@ -282,11 +285,22 @@ export class AccessDoorService {
     const device = await this.getDeviceRecord(deviceId);
     const info = await this.fallback.getFullDeviceInfo(device.ipAddress!);
     if (!info) return null;
+
+    // Clean null bytes from all string fields
+    const clean = (v: string | null): string | null =>
+      v ? v.replace(/\0/g, '').trim() || null : null;
+
+    info.serialNumber = clean(info.serialNumber);
+    info.firmware = clean(info.firmware);
+    info.deviceName = clean(info.deviceName);
+    info.platform = clean(info.platform);
+    info.os = clean(info.os);
+
     if (info.serialNumber && !device.serialNumber) {
       await this.prisma.accessDevice.update({
         where: { id: deviceId },
         data: { serialNumber: info.serialNumber },
-      });
+      }).catch(() => {});
     }
     return info;
   }
